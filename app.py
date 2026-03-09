@@ -1,485 +1,882 @@
-import { useState, useCallback, useMemo, useRef, useEffect } from "react";
+import streamlit as st
+import pandas as pd
+import numpy as np
+import plotly.express as px
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
+import folium
+from streamlit_folium import st_folium
+import json
+import io
+from datetime import datetime, timedelta
+import random
 
-const LAYERS = [
-  { id: "wetlands", label: "Wetlands (NWI)", color: "#22d3ee", icon: "💧" },
-  { id: "floodplains", label: "Floodplains (FEMA)", color: "#60a5fa", icon: "🌊" },
-  { id: "transmission", label: "Transmission Lines", color: "#f59e0b", icon: "⚡" },
-  { id: "substations", label: "Substations", color: "#f97316", icon: "🔌" },
-  { id: "soil", label: "Soil Analysis", color: "#a78bfa", icon: "🪨" },
-  { id: "sentiment", label: "Community Sentiment", color: "#fb7185", icon: "👥" },
-  { id: "nodes", label: "Pricing Nodes", color: "#34d399", icon: "💲" },
-];
+# ──────────────────────────────────────────────
+# CONFIG
+# ──────────────────────────────────────────────
+st.set_page_config(
+    page_title="SiteIQ — Renewable Energy Siting Platform",
+    page_icon="⚡",
+    layout="wide",
+    initial_sidebar_state="expanded",
+)
 
-const PARCELS = [
-  { id: 1, name: "Parcel A — Reeves Co., TX", x: 168, y: 268, w: 62, h: 48, acres: 482, owner: "Bar-T Ranch LLC", zoning: "Agricultural", state: "TX", county: "Reeves",
-    wetland: 3, flood: "X", floodCov: 2, soilScore: 91, drainage: "Well drained", hydric: false, pileSuit: "High",
-    transLine: 1.8, voltage: "345 kV", substation: 1.2, interco: "High",
-    hub: "ERCOT North Hub", hubLMP: 44, node: "REEVES_345_WIND", nodeLMP: 41, basis: -3, congestion: "Low", congFreq: 6, curtail: "Low", revRisk: "Low",
-    sentiment: 0.32, oppRisk: "Low", issues: ["Minimal opposition", "Pro-development county"],
-    score: 93, projType: "Utility Solar", permitRisk: "Low", revPotential: "High" },
-  { id: 2, name: "Parcel B — Kern Co., CA", x: 78, y: 228, w: 55, h: 42, acres: 310, owner: "Sunland Holdings", zoning: "Agricultural", state: "CA", county: "Kern",
-    wetland: 8, flood: "AE", floodCov: 10, soilScore: 78, drainage: "Moderately drained", hydric: false, pileSuit: "Moderate",
-    transLine: 4.1, voltage: "230 kV", substation: 3.5, interco: "Moderate",
-    hub: "CAISO SP15", hubLMP: 52, node: "KERN_230_SOLAR", nodeLMP: 46, basis: -6, congestion: "Medium", congFreq: 14, curtail: "Moderate", revRisk: "Moderate",
-    sentiment: -0.18, oppRisk: "Moderate", issues: ["Wildlife concerns", "Visual impact"],
-    score: 81, projType: "Utility Solar", permitRisk: "Moderate", revPotential: "High" },
-  { id: 3, name: "Parcel C — Logan Co., IL", x: 338, y: 188, w: 50, h: 40, acres: 520, owner: "Heartland Ag Corp", zoning: "Agricultural", state: "IL", county: "Logan",
-    wetland: 18, flood: "A", floodCov: 15, soilScore: 62, drainage: "Poorly drained", hydric: true, pileSuit: "Low",
-    transLine: 6.8, voltage: "138 kV", substation: 5.4, interco: "Low",
-    hub: "MISO Indiana Hub", hubLMP: 36, node: "LOGAN_138_WIND", nodeLMP: 31, basis: -5, congestion: "High", congFreq: 22, curtail: "High", revRisk: "High",
-    sentiment: -0.45, oppRisk: "High", issues: ["Strong local opposition", "Wetland advocacy groups", "Township moratorium pending"],
-    score: 48, projType: "Not Recommended", permitRisk: "High", revPotential: "Low" },
-  { id: 4, name: "Parcel D — Custer Co., OK", x: 258, y: 248, w: 58, h: 44, acres: 640, owner: "Prairie Wind LLC", zoning: "Rural", state: "OK", county: "Custer",
-    wetland: 1, flood: "X", floodCov: 0, soilScore: 88, drainage: "Well drained", hydric: false, pileSuit: "High",
-    transLine: 2.4, voltage: "345 kV", substation: 1.9, interco: "High",
-    hub: "SPP South Hub", hubLMP: 38, node: "CUSTER_345_WIND", nodeLMP: 35, basis: -3, congestion: "Low", congFreq: 8, curtail: "Low", revRisk: "Low",
-    sentiment: 0.55, oppRisk: "Low", issues: ["Community supportive", "Existing wind development nearby"],
-    score: 90, projType: "Wind Farm", permitRisk: "Low", revPotential: "High" },
-  { id: 5, name: "Parcel E — Chautauqua Co., NY", x: 418, y: 148, w: 48, h: 38, acres: 275, owner: "Lake Erie Land Trust", zoning: "Mixed Use", state: "NY", county: "Chautauqua",
-    wetland: 12, flood: "AE", floodCov: 8, soilScore: 70, drainage: "Moderately drained", hydric: false, pileSuit: "Moderate",
-    transLine: 5.5, voltage: "230 kV", substation: 4.2, interco: "Moderate",
-    hub: "NYISO Zone A", hubLMP: 48, node: "CHAUT_230_WIND", nodeLMP: 42, basis: -6, congestion: "Medium", congFreq: 16, curtail: "Moderate", revRisk: "Moderate",
-    sentiment: -0.30, oppRisk: "Moderate", issues: ["Lakeshore viewshed concerns", "Active environmental groups"],
-    score: 64, projType: "Community Solar", permitRisk: "Moderate", revPotential: "Moderate" },
-];
+# ──────────────────────────────────────────────
+# CUSTOM CSS
+# ──────────────────────────────────────────────
+st.markdown("""
+<style>
+    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;900&display=swap');
+    .block-container { padding-top: 1rem; }
+    .metric-card {
+        background: linear-gradient(135deg, #1e293b, #0f172a);
+        border: 1px solid #334155;
+        border-radius: 12px;
+        padding: 20px;
+        text-align: center;
+    }
+    .metric-value { font-size: 2.2rem; font-weight: 900; }
+    .metric-label { font-size: 0.8rem; color: #94a3b8; text-transform: uppercase; letter-spacing: 1px; }
+    .score-high { color: #22c55e; }
+    .score-mid { color: #f59e0b; }
+    .score-low { color: #ef4444; }
+    .risk-badge {
+        display: inline-block;
+        padding: 4px 12px;
+        border-radius: 20px;
+        font-size: 0.75rem;
+        font-weight: 700;
+    }
+    .badge-low { background: #22c55e22; color: #22c55e; border: 1px solid #22c55e44; }
+    .badge-med { background: #f59e0b22; color: #f59e0b; border: 1px solid #f59e0b44; }
+    .badge-high { background: #ef444422; color: #ef4444; border: 1px solid #ef444444; }
+    div[data-testid="stSidebar"] { background: #0f172a; }
+    .stTabs [data-baseweb="tab-list"] { gap: 8px; }
+    .stTabs [data-baseweb="tab"] {
+        border-radius: 8px;
+        padding: 8px 20px;
+        font-weight: 600;
+    }
+</style>
+""", unsafe_allow_html=True)
 
-const TRANSMISSION_LINES = [
-  { x1: 50, y1: 260, x2: 200, y2: 220 }, { x1: 200, y1: 220, x2: 350, y2: 200 },
-  { x1: 350, y1: 200, x2: 480, y2: 160 }, { x1: 150, y1: 300, x2: 300, y2: 270 },
-  { x1: 300, y1: 270, x2: 420, y2: 240 }, { x1: 100, y1: 180, x2: 250, y2: 170 },
-  { x1: 250, y1: 170, x2: 400, y2: 180 },
-];
+# ──────────────────────────────────────────────
+# SEED DATA — PARCELS
+# ──────────────────────────────────────────────
+@st.cache_data
+def load_parcel_data():
+    parcels = [
+        {
+            "id": 1, "name": "Reeves County Solar Site", "state": "TX", "county": "Reeves",
+            "lat": 31.39, "lon": -103.69, "acres": 482, "owner": "Bar-T Ranch LLC",
+            "zoning": "Agricultural", "land_use": "Rangeland",
+            "wetland_pct": 3, "wetland_type": "None significant",
+            "flood_zone": "X (Minimal)", "flood_coverage": 2,
+            "soil_score": 91, "drainage": "Well drained", "hydric": False,
+            "erosion_factor": 0.15, "pile_suitability": "High", "bedrock_depth": 42,
+            "trans_dist": 1.8, "voltage": "345 kV", "sub_dist": 1.2, "interconnection": "High",
+            "hub": "ERCOT North Hub", "hub_lmp": 44, "node": "REEVES_345_WIND",
+            "node_lmp": 41, "basis": -3, "congestion": "Low",
+            "cong_freq": 6, "curtail_risk": "Low", "rev_risk": "Low",
+            "sentiment": 0.32, "opp_risk": "Low",
+            "issues": ["Minimal opposition", "Pro-development county"],
+            "project_type": "Utility Solar", "permit_risk": "Low", "revenue_potential": "High",
+            "land_cost_acre": 850,
+        },
+        {
+            "id": 2, "name": "Kern County Solar Farm", "state": "CA", "county": "Kern",
+            "lat": 35.15, "lon": -118.75, "acres": 310, "owner": "Sunland Holdings",
+            "zoning": "Agricultural", "land_use": "Farmland",
+            "wetland_pct": 8, "wetland_type": "Freshwater Emergent",
+            "flood_zone": "AE", "flood_coverage": 10,
+            "soil_score": 78, "drainage": "Moderately drained", "hydric": False,
+            "erosion_factor": 0.28, "pile_suitability": "Moderate", "bedrock_depth": 28,
+            "trans_dist": 4.1, "voltage": "230 kV", "sub_dist": 3.5, "interconnection": "Moderate",
+            "hub": "CAISO SP15", "hub_lmp": 52, "node": "KERN_230_SOLAR",
+            "node_lmp": 46, "basis": -6, "congestion": "Medium",
+            "cong_freq": 14, "curtail_risk": "Moderate", "rev_risk": "Moderate",
+            "sentiment": -0.18, "opp_risk": "Moderate",
+            "issues": ["Wildlife corridor concerns", "Visual impact on ridgeline", "Active environmental groups"],
+            "project_type": "Utility Solar", "permit_risk": "Moderate", "revenue_potential": "High",
+            "land_cost_acre": 3200,
+        },
+        {
+            "id": 3, "name": "Logan County Wind Prospect", "state": "IL", "county": "Logan",
+            "lat": 40.12, "lon": -89.37, "acres": 520, "owner": "Heartland Ag Corp",
+            "zoning": "Agricultural", "land_use": "Cropland",
+            "wetland_pct": 18, "wetland_type": "Freshwater Forested/Shrub",
+            "flood_zone": "A", "flood_coverage": 15,
+            "soil_score": 62, "drainage": "Poorly drained", "hydric": True,
+            "erosion_factor": 0.42, "pile_suitability": "Low", "bedrock_depth": 15,
+            "trans_dist": 6.8, "voltage": "138 kV", "sub_dist": 5.4, "interconnection": "Low",
+            "hub": "MISO Indiana Hub", "hub_lmp": 36, "node": "LOGAN_138_WIND",
+            "node_lmp": 31, "basis": -5, "congestion": "High",
+            "cong_freq": 22, "curtail_risk": "High", "rev_risk": "High",
+            "sentiment": -0.45, "opp_risk": "High",
+            "issues": ["Strong local opposition", "Wetland advocacy groups", "Township moratorium pending"],
+            "project_type": "Not Recommended", "permit_risk": "High", "revenue_potential": "Low",
+            "land_cost_acre": 7800,
+        },
+        {
+            "id": 4, "name": "Custer County Wind Farm", "state": "OK", "county": "Custer",
+            "lat": 35.63, "lon": -99.00, "acres": 640, "owner": "Prairie Wind LLC",
+            "zoning": "Rural", "land_use": "Rangeland",
+            "wetland_pct": 1, "wetland_type": "None significant",
+            "flood_zone": "X (Minimal)", "flood_coverage": 0,
+            "soil_score": 88, "drainage": "Well drained", "hydric": False,
+            "erosion_factor": 0.18, "pile_suitability": "High", "bedrock_depth": 55,
+            "trans_dist": 2.4, "voltage": "345 kV", "sub_dist": 1.9, "interconnection": "High",
+            "hub": "SPP South Hub", "hub_lmp": 38, "node": "CUSTER_345_WIND",
+            "node_lmp": 35, "basis": -3, "congestion": "Low",
+            "cong_freq": 8, "curtail_risk": "Low", "rev_risk": "Low",
+            "sentiment": 0.55, "opp_risk": "Low",
+            "issues": ["Community supportive", "Existing wind development nearby", "County incentives available"],
+            "project_type": "Wind Farm", "permit_risk": "Low", "revenue_potential": "High",
+            "land_cost_acre": 620,
+        },
+        {
+            "id": 5, "name": "Chautauqua Community Solar", "state": "NY", "county": "Chautauqua",
+            "lat": 42.21, "lon": -79.43, "acres": 275, "owner": "Lake Erie Land Trust",
+            "zoning": "Mixed Use", "land_use": "Idle Farmland",
+            "wetland_pct": 12, "wetland_type": "Freshwater Emergent",
+            "flood_zone": "AE", "flood_coverage": 8,
+            "soil_score": 70, "drainage": "Moderately drained", "hydric": False,
+            "erosion_factor": 0.32, "pile_suitability": "Moderate", "bedrock_depth": 20,
+            "trans_dist": 5.5, "voltage": "230 kV", "sub_dist": 4.2, "interconnection": "Moderate",
+            "hub": "NYISO Zone A", "hub_lmp": 48, "node": "CHAUT_230_SOLAR",
+            "node_lmp": 42, "basis": -6, "congestion": "Medium",
+            "cong_freq": 16, "curtail_risk": "Moderate", "rev_risk": "Moderate",
+            "sentiment": -0.30, "opp_risk": "Moderate",
+            "issues": ["Lakeshore viewshed concerns", "Active environmental groups", "Supportive town board"],
+            "project_type": "Community Solar", "permit_risk": "Moderate", "revenue_potential": "Moderate",
+            "land_cost_acre": 4500,
+        },
+        {
+            "id": 6, "name": "Pecos County Solar Mega", "state": "TX", "county": "Pecos",
+            "lat": 30.94, "lon": -102.41, "acres": 1200, "owner": "TransPecos Energy LP",
+            "zoning": "Agricultural", "land_use": "Rangeland",
+            "wetland_pct": 1, "wetland_type": "None significant",
+            "flood_zone": "X (Minimal)", "flood_coverage": 1,
+            "soil_score": 89, "drainage": "Well drained", "hydric": False,
+            "erosion_factor": 0.12, "pile_suitability": "High", "bedrock_depth": 60,
+            "trans_dist": 2.1, "voltage": "345 kV", "sub_dist": 1.5, "interconnection": "High",
+            "hub": "ERCOT West Hub", "hub_lmp": 42, "node": "PECOS_345_SOLAR",
+            "node_lmp": 39, "basis": -3, "congestion": "Low",
+            "cong_freq": 7, "curtail_risk": "Low", "rev_risk": "Low",
+            "sentiment": 0.41, "opp_risk": "Low",
+            "issues": ["Strong local support", "Existing solar infrastructure", "Tax abatement available"],
+            "project_type": "Utility Solar", "permit_risk": "Low", "revenue_potential": "High",
+            "land_cost_acre": 450,
+        },
+        {
+            "id": 7, "name": "Sumner County Wind", "state": "KS", "county": "Sumner",
+            "lat": 37.18, "lon": -97.47, "acres": 890, "owner": "Great Plains Wind Co.",
+            "zoning": "Agricultural", "land_use": "Cropland",
+            "wetland_pct": 4, "wetland_type": "Riverine",
+            "flood_zone": "X (Minimal)", "flood_coverage": 3,
+            "soil_score": 84, "drainage": "Well drained", "hydric": False,
+            "erosion_factor": 0.21, "pile_suitability": "High", "bedrock_depth": 48,
+            "trans_dist": 3.0, "voltage": "345 kV", "sub_dist": 2.3, "interconnection": "High",
+            "hub": "SPP North Hub", "hub_lmp": 35, "node": "SUMNER_345_WIND",
+            "node_lmp": 33, "basis": -2, "congestion": "Low",
+            "cong_freq": 9, "curtail_risk": "Low", "rev_risk": "Low",
+            "sentiment": 0.48, "opp_risk": "Low",
+            "issues": ["Supportive county commission", "Wind energy heritage area"],
+            "project_type": "Wind Farm", "permit_risk": "Low", "revenue_potential": "High",
+            "land_cost_acre": 1100,
+        },
+        {
+            "id": 8, "name": "Imperial Valley Solar", "state": "CA", "county": "Imperial",
+            "lat": 32.85, "lon": -115.57, "acres": 750, "owner": "Desert Sun Ventures",
+            "zoning": "Agricultural", "land_use": "Desert Scrub",
+            "wetland_pct": 2, "wetland_type": "None significant",
+            "flood_zone": "X (Minimal)", "flood_coverage": 1,
+            "soil_score": 82, "drainage": "Excessively drained", "hydric": False,
+            "erosion_factor": 0.35, "pile_suitability": "Moderate", "bedrock_depth": 35,
+            "trans_dist": 3.8, "voltage": "500 kV", "sub_dist": 2.8, "interconnection": "High",
+            "hub": "CAISO SP15", "hub_lmp": 55, "node": "IMPERIAL_500_SOLAR",
+            "node_lmp": 50, "basis": -5, "congestion": "Medium",
+            "cong_freq": 12, "curtail_risk": "Moderate", "rev_risk": "Moderate",
+            "sentiment": 0.10, "opp_risk": "Low",
+            "issues": ["Some dust concerns", "Generally supportive", "Existing solar neighbors"],
+            "project_type": "Utility Solar", "permit_risk": "Low", "revenue_potential": "High",
+            "land_cost_acre": 1800,
+        },
+    ]
+    return pd.DataFrame(parcels)
 
-const SUBSTATIONS = [
-  { x: 200, y: 220, name: "Mesa Sub" }, { x: 350, y: 200, name: "Central Sub" },
-  { x: 300, y: 270, name: "Plains Sub" }, { x: 150, y: 300, name: "Valley Sub" },
-  { x: 420, y: 180, name: "Northeast Sub" },
-];
 
-const WETLAND_ZONES = [
-  { cx: 345, cy: 195, rx: 30, ry: 22 }, { cx: 430, cy: 155, rx: 18, ry: 14 },
-  { cx: 180, cy: 240, rx: 14, ry: 10 },
-];
+# ──────────────────────────────────────────────
+# SCORING ENGINE
+# ──────────────────────────────────────────────
+def compute_site_score(row, weights):
+    trans_score = max(0, 100 - (row["trans_dist"] / 10) * 100)
+    price_score = min(100, (row["node_lmp"] / 60) * 100)
+    wet_score = max(0, 100 - row["wetland_pct"] * 5)
+    flood_map = {"X (Minimal)": 100, "AE": 55, "A": 25}
+    flood_score = flood_map.get(row["flood_zone"], 50)
+    soil_score = row["soil_score"]
+    sent_score = (row["sentiment"] + 1) / 2 * 100
+    cost_score = max(0, 100 - (row["land_cost_acre"] / 10000) * 100)
 
-const FLOOD_ZONES = [
-  { cx: 100, cy: 250, rx: 45, ry: 25 }, { cx: 430, cy: 155, rx: 25, ry: 18 },
-  { cx: 340, cy: 200, rx: 28, ry: 20 },
-];
-
-const PRICING_NODES = [
-  { x: 175, y: 285, label: "$44" }, { x: 95, y: 240, label: "$52" },
-  { x: 345, y: 195, label: "$36" }, { x: 270, y: 260, label: "$38" },
-  { x: 425, y: 155, label: "$48" },
-];
-
-const SENTIMENT_DOTS = [
-  { x: 180, y: 275, s: 0.3 }, { x: 90, y: 235, s: -0.2 },
-  { x: 350, y: 190, s: -0.5 }, { x: 265, y: 255, s: 0.5 },
-  { x: 435, y: 150, s: -0.3 },
-];
-
-const riskColor = (v) => v === "Low" ? "#22c55e" : v === "Moderate" || v === "Medium" ? "#f59e0b" : "#ef4444";
-const scoreColor = (s) => s >= 80 ? "#22c55e" : s >= 60 ? "#f59e0b" : "#ef4444";
-
-function Badge({ children, color }) {
-  return <span style={{ background: color + "22", color, border: `1px solid ${color}44`, borderRadius: 6, padding: "2px 8px", fontSize: 11, fontWeight: 600 }}>{children}</span>;
-}
-
-function ScoreBar({ value, max = 100, color }) {
-  return (
-    <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-      <div style={{ flex: 1, height: 8, background: "#1e293b", borderRadius: 4, overflow: "hidden" }}>
-        <div style={{ width: `${(value / max) * 100}%`, height: "100%", background: color, borderRadius: 4, transition: "width 0.5s" }} />
-      </div>
-      <span style={{ fontSize: 12, fontWeight: 700, color, minWidth: 32, textAlign: "right" }}>{value}</span>
-    </div>
-  );
-}
-
-function Section({ title, children }) {
-  return (
-    <div style={{ marginBottom: 16 }}>
-      <div style={{ fontSize: 11, fontWeight: 700, textTransform: "uppercase", letterSpacing: 1, color: "#94a3b8", marginBottom: 8 }}>{title}</div>
-      {children}
-    </div>
-  );
-}
-
-function Row({ label, value, badge }) {
-  return (
-    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "3px 0", fontSize: 13 }}>
-      <span style={{ color: "#94a3b8" }}>{label}</span>
-      {badge ? <Badge color={badge.color}>{value}</Badge> : <span style={{ color: "#e2e8f0", fontWeight: 600 }}>{value}</span>}
-    </div>
-  );
-}
-
-function MapCanvas({ layers, selected, onSelect, hoveredId, setHoveredId }) {
-  const canvasRef = useRef(null);
-
-  useEffect(() => {
-    const cvs = canvasRef.current;
-    if (!cvs) return;
-    const ctx = cvs.getContext("2d");
-    const W = cvs.width, H = cvs.height;
-    ctx.clearRect(0, 0, W, H);
-
-    // BG
-    const grad = ctx.createLinearGradient(0, 0, W, H);
-    grad.addColorStop(0, "#0c1222"); grad.addColorStop(1, "#111827");
-    ctx.fillStyle = grad; ctx.fillRect(0, 0, W, H);
-
-    // Grid
-    ctx.strokeStyle = "#1e293b33"; ctx.lineWidth = 0.5;
-    for (let x = 0; x < W; x += 30) { ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, H); ctx.stroke(); }
-    for (let y = 0; y < H; y += 30) { ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(W, y); ctx.stroke(); }
-
-    // US outline (simplified)
-    ctx.beginPath();
-    ctx.moveTo(40,160); ctx.lineTo(60,140); ctx.lineTo(120,130); ctx.lineTo(180,120); ctx.lineTo(240,115);
-    ctx.lineTo(320,120); ctx.lineTo(400,110); ctx.lineTo(460,120); ctx.lineTo(490,140);
-    ctx.lineTo(485,180); ctx.lineTo(470,200); ctx.lineTo(450,230); ctx.lineTo(430,260);
-    ctx.lineTo(400,280); ctx.lineTo(350,300); ctx.lineTo(280,310); ctx.lineTo(220,315);
-    ctx.lineTo(160,310); ctx.lineTo(120,300); ctx.lineTo(80,290); ctx.lineTo(50,270);
-    ctx.lineTo(35,240); ctx.lineTo(30,200); ctx.closePath();
-    ctx.fillStyle = "#1e293b44"; ctx.fill();
-    ctx.strokeStyle = "#334155"; ctx.lineWidth = 1.5; ctx.stroke();
-
-    // Flood zones
-    if (layers.floodplains) {
-      FLOOD_ZONES.forEach(z => {
-        ctx.beginPath(); ctx.ellipse(z.cx, z.cy, z.rx, z.ry, 0, 0, Math.PI * 2);
-        ctx.fillStyle = "#60a5fa18"; ctx.fill();
-        ctx.strokeStyle = "#60a5fa44"; ctx.lineWidth = 1; ctx.stroke();
-      });
+    total = (
+        trans_score * weights["Transmission Proximity"] / 100
+        + price_score * weights["Node Pricing"] / 100
+        + wet_score * weights["Wetland Risk"] / 100
+        + flood_score * weights["Flood Risk"] / 100
+        + soil_score * weights["Soil Suitability"] / 100
+        + sent_score * weights["Community Sentiment"] / 100
+        + cost_score * weights["Land Cost"] / 100
+    )
+    return round(total), {
+        "Transmission": round(trans_score),
+        "Pricing": round(price_score),
+        "Wetland": round(wet_score),
+        "Flood": round(flood_score),
+        "Soil": round(soil_score),
+        "Sentiment": round(sent_score),
+        "Land Cost": round(cost_score),
     }
 
-    // Wetlands
-    if (layers.wetlands) {
-      WETLAND_ZONES.forEach(z => {
-        ctx.beginPath(); ctx.ellipse(z.cx, z.cy, z.rx, z.ry, 0, 0, Math.PI * 2);
-        ctx.fillStyle = "#22d3ee18"; ctx.fill();
-        ctx.strokeStyle = "#22d3ee55"; ctx.lineWidth = 1; ctx.setLineDash([4, 3]); ctx.stroke(); ctx.setLineDash([]);
-      });
-    }
 
-    // Soil
-    if (layers.soil) {
-      PARCELS.forEach(p => {
-        const c = p.soilScore >= 80 ? "#a78bfa" : p.soilScore >= 60 ? "#c084fc" : "#e879f9";
-        ctx.fillStyle = c + "15";
-        ctx.fillRect(p.x - 4, p.y - 4, p.w + 8, p.h + 8);
-      });
-    }
+def generate_lmp_history(base, days=365):
+    np.random.seed(42)
+    dates = [datetime(2024, 1, 1) + timedelta(days=i) for i in range(days)]
+    prices = base + np.cumsum(np.random.randn(days) * 1.5)
+    prices = np.clip(prices, 5, 150)
+    seasonal = 8 * np.sin(np.linspace(0, 2 * np.pi, days))
+    prices = prices + seasonal
+    return pd.DataFrame({"Date": dates, "LMP ($/MWh)": np.round(prices, 2)})
 
-    // Transmission
-    if (layers.transmission) {
-      TRANSMISSION_LINES.forEach(l => {
-        ctx.beginPath(); ctx.moveTo(l.x1, l.y1); ctx.lineTo(l.x2, l.y2);
-        ctx.strokeStyle = "#f59e0b88"; ctx.lineWidth = 2; ctx.stroke();
-        // glow
-        ctx.strokeStyle = "#f59e0b22"; ctx.lineWidth = 6; ctx.stroke();
-      });
-    }
 
-    // Substations
-    if (layers.substations) {
-      SUBSTATIONS.forEach(s => {
-        ctx.beginPath(); ctx.arc(s.x, s.y, 6, 0, Math.PI * 2);
-        ctx.fillStyle = "#f97316"; ctx.fill();
-        ctx.strokeStyle = "#f9731644"; ctx.lineWidth = 8; ctx.stroke();
-        ctx.fillStyle = "#f9731699"; ctx.font = "9px system-ui"; ctx.fillText(s.name, s.x + 10, s.y + 3);
-      });
-    }
+def generate_congestion_data():
+    months = pd.date_range("2024-01", periods=12, freq="MS").strftime("%b %Y").tolist()
+    return pd.DataFrame({
+        "Month": months,
+        "Congestion Events": np.random.randint(2, 30, 12),
+        "Avg Curtailment %": np.round(np.random.uniform(1, 18, 12), 1),
+        "Revenue Impact ($k)": np.round(np.random.uniform(-50, -2, 12), 1),
+    })
 
-    // Pricing nodes
-    if (layers.nodes) {
-      PRICING_NODES.forEach(n => {
-        ctx.beginPath(); ctx.arc(n.x, n.y, 10, 0, Math.PI * 2);
-        ctx.fillStyle = "#34d39922"; ctx.fill();
-        ctx.strokeStyle = "#34d399"; ctx.lineWidth = 1.5; ctx.stroke();
-        ctx.fillStyle = "#34d399"; ctx.font = "bold 10px system-ui"; ctx.textAlign = "center";
-        ctx.fillText(n.label, n.x, n.y + 4); ctx.textAlign = "start";
-      });
-    }
 
-    // Sentiment
-    if (layers.sentiment) {
-      SENTIMENT_DOTS.forEach(d => {
-        const c = d.s > 0 ? "#22c55e" : d.s > -0.3 ? "#f59e0b" : "#ef4444";
-        ctx.beginPath(); ctx.arc(d.x, d.y, 14, 0, Math.PI * 2);
-        ctx.fillStyle = c + "18"; ctx.fill();
-        ctx.strokeStyle = c + "66"; ctx.lineWidth = 1; ctx.setLineDash([3, 2]); ctx.stroke(); ctx.setLineDash([]);
-      });
-    }
+# ──────────────────────────────────────────────
+# MAP BUILDER
+# ──────────────────────────────────────────────
+def build_map(df, show_layers):
+    m = folium.Map(location=[37.5, -96], zoom_start=5, tiles=None)
+    folium.TileLayer(
+        tiles="https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png",
+        attr="CartoDB", name="Dark Basemap", control=False,
+    ).add_to(m)
 
-    // Parcels
-    PARCELS.forEach(p => {
-      const isSel = selected === p.id;
-      const isHov = hoveredId === p.id;
-      const sc = scoreColor(p.score);
-      ctx.fillStyle = isSel ? sc + "44" : isHov ? sc + "28" : sc + "14";
-      ctx.fillRect(p.x, p.y, p.w, p.h);
-      ctx.strokeStyle = isSel ? sc : isHov ? sc + "aa" : sc + "55";
-      ctx.lineWidth = isSel ? 2.5 : isHov ? 2 : 1;
-      ctx.strokeRect(p.x, p.y, p.w, p.h);
-      // label
-      ctx.fillStyle = isSel ? "#fff" : "#cbd5e1";
-      ctx.font = `${isSel ? "bold " : ""}10px system-ui`;
-      ctx.fillText(p.name.split("—")[0].trim(), p.x + 4, p.y + 13);
-      ctx.fillStyle = sc; ctx.font = "bold 11px system-ui";
-      ctx.fillText(p.score, p.x + p.w - 18, p.y + p.h - 5);
-    });
+    if show_layers.get("transmission"):
+        trans_group = folium.FeatureGroup(name="Transmission Lines")
+        lines = [
+            [[31.0, -104.0], [32.5, -101.0], [34.0, -99.0]],
+            [[35.0, -119.0], [36.0, -117.5], [37.0, -116.0]],
+            [[39.0, -90.0], [40.5, -89.0], [42.0, -88.0]],
+            [[35.0, -99.5], [36.5, -98.0], [37.5, -97.0]],
+            [[41.0, -80.0], [42.0, -79.5], [43.0, -78.5]],
+            [[32.5, -116.0], [33.5, -115.0], [34.5, -114.0]],
+        ]
+        for line in lines:
+            folium.PolyLine(line, color="#f59e0b", weight=3, opacity=0.7,
+                            dash_array="8 4").add_to(trans_group)
+        trans_group.add_to(m)
 
-  }, [layers, selected, hoveredId]);
+    if show_layers.get("substations"):
+        sub_group = folium.FeatureGroup(name="Substations")
+        subs = [
+            (31.5, -103.0, "Pecos Sub 345kV"), (35.5, -118.0, "Kern Sub 230kV"),
+            (40.0, -89.5, "Lincoln Sub 138kV"), (35.8, -99.2, "Custer Sub 345kV"),
+            (42.3, -79.5, "Erie Sub 230kV"), (33.0, -115.5, "Imperial Sub 500kV"),
+            (37.2, -97.5, "Sumner Sub 345kV"),
+        ]
+        for lat, lon, name in subs:
+            folium.CircleMarker(
+                [lat, lon], radius=8, color="#f97316", fill=True,
+                fill_color="#f97316", fill_opacity=0.8,
+                popup=folium.Popup(f"<b>{name}</b>", max_width=200), tooltip=name,
+            ).add_to(sub_group)
+        sub_group.add_to(m)
 
-  const handleClick = (e) => {
-    const rect = canvasRef.current.getBoundingClientRect();
-    const sx = canvasRef.current.width / rect.width;
-    const sy = canvasRef.current.height / rect.height;
-    const mx = (e.clientX - rect.left) * sx;
-    const my = (e.clientY - rect.top) * sy;
-    const hit = PARCELS.find(p => mx >= p.x && mx <= p.x + p.w && my >= p.y && my <= p.y + p.h);
-    if (hit) onSelect(hit.id);
-  };
+    if show_layers.get("wetlands"):
+        wet_group = folium.FeatureGroup(name="Wetland Zones")
+        for _, row in df[df["wetland_pct"] > 5].iterrows():
+            folium.Circle(
+                [row["lat"], row["lon"]], radius=8000,
+                color="#22d3ee", fill=True, fill_color="#22d3ee",
+                fill_opacity=0.15, weight=1,
+                tooltip=f"Wetland area near {row['name']} ({row['wetland_pct']}%)",
+            ).add_to(wet_group)
+        wet_group.add_to(m)
 
-  const handleMove = (e) => {
-    const rect = canvasRef.current.getBoundingClientRect();
-    const sx = canvasRef.current.width / rect.width;
-    const sy = canvasRef.current.height / rect.height;
-    const mx = (e.clientX - rect.left) * sx;
-    const my = (e.clientY - rect.top) * sy;
-    const hit = PARCELS.find(p => mx >= p.x && mx <= p.x + p.w && my >= p.y && my <= p.y + p.h);
-    setHoveredId(hit ? hit.id : null);
-  };
+    if show_layers.get("floodplains"):
+        flood_group = folium.FeatureGroup(name="Flood Zones")
+        for _, row in df[df["flood_coverage"] > 5].iterrows():
+            folium.Circle(
+                [row["lat"], row["lon"]], radius=6000,
+                color="#60a5fa", fill=True, fill_color="#60a5fa",
+                fill_opacity=0.15, weight=1,
+                tooltip=f"Flood Zone {row['flood_zone']} - {row['flood_coverage']}% coverage",
+            ).add_to(flood_group)
+        flood_group.add_to(m)
 
-  return (
-    <canvas ref={canvasRef} width={530} height={370} onClick={handleClick} onMouseMove={handleMove}
-      style={{ width: "100%", height: "100%", cursor: hoveredId ? "pointer" : "crosshair", borderRadius: 12 }} />
-  );
-}
+    for _, row in df.iterrows():
+        score = row.get("score", 50)
+        if score >= 80:
+            color = "#22c55e"
+        elif score >= 60:
+            color = "#f59e0b"
+        else:
+            color = "#ef4444"
 
-function QueryPanel({ onApply }) {
-  const [acres, setAcres] = useState(200);
-  const [transDist, setTransDist] = useState(10);
-  const [nodePrice, setNodePrice] = useState(30);
-  const [wetMax, setWetMax] = useState(20);
-  const [minScore, setMinScore] = useState(0);
-  const sliderStyle = { width: "100%", accentColor: "#6366f1", height: 4, cursor: "pointer" };
-  const labelStyle = { display: "flex", justifyContent: "space-between", fontSize: 12, color: "#94a3b8", marginBottom: 2 };
-  const valStyle = { color: "#e2e8f0", fontWeight: 700 };
-  return (
-    <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-      <div><div style={labelStyle}><span>Min Acres</span><span style={valStyle}>{acres}</span></div><input type="range" min={50} max={1000} value={acres} onChange={e => setAcres(+e.target.value)} style={sliderStyle} /></div>
-      <div><div style={labelStyle}><span>Max Trans. Distance (mi)</span><span style={valStyle}>{transDist}</span></div><input type="range" min={1} max={20} value={transDist} onChange={e => setTransDist(+e.target.value)} style={sliderStyle} /></div>
-      <div><div style={labelStyle}><span>Min Node Price ($/MWh)</span><span style={valStyle}>${nodePrice}</span></div><input type="range" min={10} max={80} value={nodePrice} onChange={e => setNodePrice(+e.target.value)} style={sliderStyle} /></div>
-      <div><div style={labelStyle}><span>Max Wetland %</span><span style={valStyle}>{wetMax}%</span></div><input type="range" min={0} max={30} value={wetMax} onChange={e => setWetMax(+e.target.value)} style={sliderStyle} /></div>
-      <div><div style={labelStyle}><span>Min Site Score</span><span style={valStyle}>{minScore}</span></div><input type="range" min={0} max={100} value={minScore} onChange={e => setMinScore(+e.target.value)} style={sliderStyle} /></div>
-      <button onClick={() => onApply({ acres, transDist, nodePrice, wetMax, minScore })}
-        style={{ marginTop: 4, padding: "8px 0", background: "linear-gradient(135deg, #6366f1, #8b5cf6)", color: "#fff", border: "none", borderRadius: 8, fontWeight: 700, fontSize: 13, cursor: "pointer" }}>
-        Search Parcels
-      </button>
-    </div>
-  );
-}
-
-const WEIGHTS = { transmission: 25, nodePrice: 15, wetlands: 15, flood: 10, soil: 15, sentiment: 10, landCost: 10 };
-
-export default function App() {
-  const [layers, setLayers] = useState({ wetlands: true, floodplains: true, transmission: true, substations: true, soil: false, sentiment: false, nodes: true });
-  const [selected, setSelected] = useState(1);
-  const [tab, setTab] = useState("analysis");
-  const [hoveredId, setHoveredId] = useState(null);
-  const [queryResults, setQueryResults] = useState(null);
-
-  const toggleLayer = (id) => setLayers(l => ({ ...l, [id]: !l[id] }));
-  const p = PARCELS.find(p => p.id === selected) || PARCELS[0];
-
-  const handleQuery = (q) => {
-    const results = PARCELS.filter(p => p.acres >= q.acres && p.transLine <= q.transDist && p.nodeLMP >= q.nodePrice && p.wetland <= q.wetMax && p.score >= q.minScore);
-    setQueryResults(results);
-    setTab("query");
-  };
-
-  const panelBg = "#0f172a"; const cardBg = "#1e293b"; const border = "#334155";
-
-  return (
-    <div style={{ display: "flex", height: "100vh", fontFamily: "'Inter', system-ui, sans-serif", background: "#0a0e1a", color: "#e2e8f0", overflow: "hidden" }}>
-      {/* Left Sidebar */}
-      <div style={{ width: 220, background: panelBg, borderRight: `1px solid ${border}`, display: "flex", flexDirection: "column", flexShrink: 0 }}>
-        <div style={{ padding: "16px 16px 12px", borderBottom: `1px solid ${border}` }}>
-          <div style={{ fontSize: 15, fontWeight: 800, background: "linear-gradient(135deg, #6366f1, #22d3ee)", WebkitBackgroundClip: "text", WebkitTextFillColor: "transparent" }}>SiteIQ</div>
-          <div style={{ fontSize: 10, color: "#64748b", marginTop: 2 }}>Renewable Energy Siting Platform</div>
+        popup_html = f"""
+        <div style="font-family:Inter,sans-serif;min-width:220px">
+            <h4 style="margin:0 0 8px;color:{color}">{row['name']}</h4>
+            <table style="font-size:12px;width:100%">
+                <tr><td><b>Score</b></td><td style="color:{color};font-weight:900;font-size:18px">{score}/100</td></tr>
+                <tr><td><b>Acres</b></td><td>{row['acres']}</td></tr>
+                <tr><td><b>Type</b></td><td>{row['project_type']}</td></tr>
+                <tr><td><b>Trans. Dist</b></td><td>{row['trans_dist']} mi</td></tr>
+                <tr><td><b>Node LMP</b></td><td>${row['node_lmp']}/MWh</td></tr>
+                <tr><td><b>Wetlands</b></td><td>{row['wetland_pct']}%</td></tr>
+                <tr><td><b>Sentiment</b></td><td>{row['sentiment']}</td></tr>
+            </table>
         </div>
-        <div style={{ padding: 12, flex: 1, overflowY: "auto" }}>
-          <div style={{ fontSize: 10, fontWeight: 700, textTransform: "uppercase", letterSpacing: 1, color: "#64748b", marginBottom: 8 }}>Map Layers</div>
-          {LAYERS.map(l => (
-            <button key={l.id} onClick={() => toggleLayer(l.id)}
-              style={{ display: "flex", alignItems: "center", gap: 8, width: "100%", padding: "7px 10px", marginBottom: 3, background: layers[l.id] ? l.color + "18" : "transparent", border: `1px solid ${layers[l.id] ? l.color + "44" : "transparent"}`, borderRadius: 8, color: layers[l.id] ? l.color : "#64748b", fontSize: 12, cursor: "pointer", textAlign: "left", transition: "all 0.2s" }}>
-              <span style={{ fontSize: 13 }}>{l.icon}</span>
-              <span style={{ flex: 1 }}>{l.label}</span>
-              <span style={{ width: 8, height: 8, borderRadius: "50%", background: layers[l.id] ? l.color : "#334155" }} />
-            </button>
-          ))}
-          <div style={{ fontSize: 10, fontWeight: 700, textTransform: "uppercase", letterSpacing: 1, color: "#64748b", margin: "16px 0 8px" }}>Parcels</div>
-          {PARCELS.map(pr => (
-            <button key={pr.id} onClick={() => { setSelected(pr.id); setTab("analysis"); }}
-              style={{ display: "flex", alignItems: "center", justifyContent: "space-between", width: "100%", padding: "7px 10px", marginBottom: 3, background: selected === pr.id ? "#6366f118" : "transparent", border: `1px solid ${selected === pr.id ? "#6366f144" : "transparent"}`, borderRadius: 8, color: selected === pr.id ? "#c7d2fe" : "#94a3b8", fontSize: 11, cursor: "pointer", textAlign: "left", transition: "all 0.2s" }}>
-              <span>{pr.name.split("—")[0].trim()}</span>
-              <span style={{ fontWeight: 700, color: scoreColor(pr.score) }}>{pr.score}</span>
-            </button>
-          ))}
-        </div>
-        <div style={{ padding: 12, borderTop: `1px solid ${border}`, fontSize: 10, color: "#475569" }}>
-          Scoring: Transmission 25% · Price 15% · Wetlands 15% · Soil 15% · Flood 10% · Sentiment 10% · Cost 10%
-        </div>
-      </div>
+        """
+        folium.CircleMarker(
+            [row["lat"], row["lon"]], radius=12 + score / 10,
+            color=color, fill=True, fill_color=color,
+            fill_opacity=0.6, weight=2,
+            popup=folium.Popup(popup_html, max_width=280),
+            tooltip=f"{row['name']} - Score: {score}",
+        ).add_to(m)
 
-      {/* Center — Map */}
-      <div style={{ flex: 1, display: "flex", flexDirection: "column", minWidth: 0 }}>
-        <div style={{ padding: "10px 16px", borderBottom: `1px solid ${border}`, display: "flex", gap: 12, alignItems: "center", background: panelBg }}>
-          {["analysis", "query", "scoring"].map(t => (
-            <button key={t} onClick={() => setTab(t)}
-              style={{ padding: "5px 14px", borderRadius: 6, border: "none", background: tab === t ? "#6366f1" : "transparent", color: tab === t ? "#fff" : "#94a3b8", fontSize: 12, fontWeight: 600, cursor: "pointer", transition: "all 0.2s" }}>
-              {t === "analysis" ? "Site Analysis" : t === "query" ? "Developer Query" : "Score Breakdown"}
-            </button>
-          ))}
-          <div style={{ flex: 1 }} />
-          <span style={{ fontSize: 11, color: "#64748b" }}>Click a parcel on the map to analyze</span>
-        </div>
-        <div style={{ flex: 1, padding: 12, position: "relative" }}>
-          <MapCanvas layers={layers} selected={selected} onSelect={(id) => { setSelected(id); setTab("analysis"); }} hoveredId={hoveredId} setHoveredId={setHoveredId} />
-          {/* Legend */}
-          <div style={{ position: "absolute", bottom: 20, left: 20, background: panelBg + "ee", backdropFilter: "blur(8px)", border: `1px solid ${border}`, borderRadius: 10, padding: "8px 12px", display: "flex", gap: 14, fontSize: 10, color: "#94a3b8" }}>
-            <span><span style={{ display: "inline-block", width: 8, height: 8, borderRadius: 2, background: "#22c55e", marginRight: 4 }} />Score ≥80</span>
-            <span><span style={{ display: "inline-block", width: 8, height: 8, borderRadius: 2, background: "#f59e0b", marginRight: 4 }} />Score 60-79</span>
-            <span><span style={{ display: "inline-block", width: 8, height: 8, borderRadius: 2, background: "#ef4444", marginRight: 4 }} />Score &lt;60</span>
-          </div>
-        </div>
-      </div>
+    folium.LayerControl(collapsed=False).add_to(m)
+    return m
 
-      {/* Right Panel */}
-      <div style={{ width: 310, background: panelBg, borderLeft: `1px solid ${border}`, overflowY: "auto", flexShrink: 0 }}>
-        <div style={{ padding: 16 }}>
-          {tab === "analysis" && (
-            <>
-              <div style={{ marginBottom: 16 }}>
-                <div style={{ fontSize: 15, fontWeight: 800, color: "#f1f5f9" }}>{p.name}</div>
-                <div style={{ display: "flex", gap: 8, marginTop: 6, flexWrap: "wrap" }}>
-                  <Badge color={scoreColor(p.score)}>Score: {p.score}/100</Badge>
-                  <Badge color="#6366f1">{p.acres} ac</Badge>
-                  <Badge color={riskColor(p.permitRisk)}>{p.projType}</Badge>
-                </div>
-              </div>
-              <Section title="Ownership">
-                <Row label="Owner" value={p.owner} />
-                <Row label="Zoning" value={p.zoning} />
-                <Row label="County" value={`${p.county} Co., ${p.state}`} />
-              </Section>
-              <Section title="Environmental">
-                <Row label="Wetland Coverage" value={`${p.wetland}%`} badge={{ color: p.wetland > 10 ? "#ef4444" : p.wetland > 5 ? "#f59e0b" : "#22c55e" }} />
-                <Row label="Flood Zone" value={p.flood} badge={{ color: p.flood === "X" ? "#22c55e" : p.flood === "AE" ? "#f59e0b" : "#ef4444" }} />
-                <Row label="Flood Coverage" value={`${p.floodCov}%`} />
-              </Section>
-              <Section title="Soil Analysis">
-                <div style={{ marginBottom: 6 }}><ScoreBar value={p.soilScore} color="#a78bfa" /></div>
-                <Row label="Drainage" value={p.drainage} />
-                <Row label="Hydric Soil" value={p.hydric ? "Yes" : "No"} badge={{ color: p.hydric ? "#ef4444" : "#22c55e" }} />
-                <Row label="Pile Suitability" value={p.pileSuit} badge={{ color: riskColor(p.pileSuit === "High" ? "Low" : p.pileSuit === "Moderate" ? "Moderate" : "High") }} />
-              </Section>
-              <Section title="Transmission Access">
-                <Row label="Nearest Line" value={`${p.transLine} mi`} />
-                <Row label="Voltage" value={p.voltage} />
-                <Row label="Nearest Substation" value={`${p.substation} mi`} />
-                <Row label="Interconnection" value={p.interco} badge={{ color: riskColor(p.interco === "High" ? "Low" : p.interco) }} />
-              </Section>
-              <Section title="Hub / Node Pricing">
-                <Row label="Hub" value={p.hub} />
-                <Row label="Hub LMP" value={`$${p.hubLMP}/MWh`} />
-                <Row label="Node" value={p.node} />
-                <Row label="Node LMP" value={`$${p.nodeLMP}/MWh`} />
-                <Row label="Basis" value={`$${p.basis}/MWh`} badge={{ color: Math.abs(p.basis) > 5 ? "#ef4444" : "#f59e0b" }} />
-                <Row label="Congestion Risk" value={p.congestion} badge={{ color: riskColor(p.congestion) }} />
-              </Section>
-              <Section title="Congestion Analytics">
-                <Row label="Congestion Freq." value={`${p.congFreq}%`} />
-                <Row label="Curtailment Risk" value={p.curtail} badge={{ color: riskColor(p.curtail) }} />
-                <Row label="Revenue Risk" value={p.revRisk} badge={{ color: riskColor(p.revRisk) }} />
-              </Section>
-              <Section title="Community Sentiment">
-                <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6 }}>
-                  <span style={{ fontSize: 22, fontWeight: 800, color: p.sentiment > 0 ? "#22c55e" : p.sentiment > -0.3 ? "#f59e0b" : "#ef4444" }}>{p.sentiment > 0 ? "+" : ""}{p.sentiment.toFixed(2)}</span>
-                  <Badge color={riskColor(p.oppRisk)}>{p.oppRisk} Opposition</Badge>
-                </div>
-                {p.issues.map((issue, i) => (
-                  <div key={i} style={{ fontSize: 12, color: "#94a3b8", padding: "2px 0" }}>• {issue}</div>
-                ))}
-              </Section>
-            </>
-          )}
 
-          {tab === "query" && (
-            <>
-              <div style={{ fontSize: 15, fontWeight: 800, color: "#f1f5f9", marginBottom: 16 }}>Developer Query</div>
-              <QueryPanel onApply={handleQuery} />
-              {queryResults !== null && (
-                <div style={{ marginTop: 16 }}>
-                  <div style={{ fontSize: 11, fontWeight: 700, textTransform: "uppercase", letterSpacing: 1, color: "#64748b", marginBottom: 8 }}>{queryResults.length} Results</div>
-                  {queryResults.length === 0 && <div style={{ fontSize: 13, color: "#64748b", padding: 16, textAlign: "center" }}>No parcels match your criteria. Try adjusting filters.</div>}
-                  {queryResults.map(r => (
-                    <button key={r.id} onClick={() => { setSelected(r.id); setTab("analysis"); }}
-                      style={{ display: "block", width: "100%", textAlign: "left", padding: 12, marginBottom: 6, background: cardBg, border: `1px solid ${border}`, borderRadius: 10, cursor: "pointer", color: "#e2e8f0" }}>
-                      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-                        <span style={{ fontWeight: 700, fontSize: 13 }}>{r.name}</span>
-                        <span style={{ fontWeight: 800, color: scoreColor(r.score) }}>{r.score}</span>
-                      </div>
-                      <div style={{ display: "flex", gap: 6, marginTop: 6, flexWrap: "wrap" }}>
-                        <Badge color="#6366f1">{r.acres} ac</Badge>
-                        <Badge color="#f59e0b">{r.transLine} mi</Badge>
-                        <Badge color="#34d399">${r.nodeLMP}/MWh</Badge>
-                        <Badge color="#22d3ee">{r.wetland}% wet</Badge>
-                      </div>
-                    </button>
-                  ))}
-                </div>
-              )}
-            </>
-          )}
+# ──────────────────────────────────────────────
+# MAIN APP
+# ──────────────────────────────────────────────
+def main():
+    df = load_parcel_data()
 
-          {tab === "scoring" && (
-            <>
-              <div style={{ fontSize: 15, fontWeight: 800, color: "#f1f5f9", marginBottom: 4 }}>Score Breakdown</div>
-              <div style={{ fontSize: 12, color: "#64748b", marginBottom: 16 }}>{p.name}</div>
-              <div style={{ textAlign: "center", marginBottom: 20 }}>
-                <div style={{ fontSize: 52, fontWeight: 900, color: scoreColor(p.score), lineHeight: 1 }}>{p.score}</div>
-                <div style={{ fontSize: 12, color: "#64748b", marginTop: 4 }}>/ 100 Site Score</div>
-              </div>
-              {[
-                { label: "Transmission Proximity", w: 25, val: p.transLine <= 2 ? 95 : p.transLine <= 5 ? 75 : 40 },
-                { label: "Node Pricing", w: 15, val: p.nodeLMP >= 40 ? 90 : p.nodeLMP >= 35 ? 70 : 50 },
-                { label: "Wetland Risk", w: 15, val: p.wetland <= 5 ? 95 : p.wetland <= 10 ? 65 : 30 },
-                { label: "Soil Suitability", w: 15, val: p.soilScore },
-                { label: "Flood Risk", w: 10, val: p.flood === "X" ? 95 : p.flood === "AE" ? 60 : 35 },
-                { label: "Community Sentiment", w: 10, val: p.sentiment > 0.2 ? 90 : p.sentiment > -0.2 ? 60 : 25 },
-                { label: "Land Cost", w: 10, val: 70 },
-              ].map((f, i) => (
-                <div key={i} style={{ marginBottom: 12 }}>
-                  <div style={{ display: "flex", justifyContent: "space-between", fontSize: 12, color: "#94a3b8", marginBottom: 4 }}>
-                    <span>{f.label}</span>
-                    <span style={{ color: "#64748b" }}>{f.w}% weight</span>
-                  </div>
-                  <ScoreBar value={f.val} color={f.val >= 80 ? "#22c55e" : f.val >= 60 ? "#f59e0b" : "#ef4444"} />
-                </div>
-              ))}
-              <div style={{ marginTop: 20, padding: 12, background: cardBg, borderRadius: 10, border: `1px solid ${border}` }}>
-                <Row label="Recommended Type" value={p.projType} badge={{ color: p.projType === "Not Recommended" ? "#ef4444" : "#22c55e" }} />
-                <Row label="Permit Risk" value={p.permitRisk} badge={{ color: riskColor(p.permitRisk) }} />
-                <Row label="Revenue Potential" value={p.revPotential} badge={{ color: riskColor(p.revPotential === "High" ? "Low" : p.revPotential === "Moderate" ? "Moderate" : "High") }} />
-              </div>
-            </>
-          )}
+    # ── SIDEBAR ──
+    with st.sidebar:
+        st.markdown("## ⚡ SiteIQ")
+        st.caption("Renewable Energy Siting Intelligence Platform")
+        st.divider()
+
+        st.markdown("### Scoring Weights")
+        st.caption("Adjust weights for the multi-factor scoring engine (must total 100%)")
+
+        weights = {}
+        weights["Transmission Proximity"] = st.slider("Transmission Proximity", 0, 50, 25, key="w_trans")
+        weights["Node Pricing"] = st.slider("Node Pricing", 0, 50, 15, key="w_price")
+        weights["Wetland Risk"] = st.slider("Wetland Risk", 0, 50, 15, key="w_wet")
+        weights["Flood Risk"] = st.slider("Flood Risk", 0, 50, 10, key="w_flood")
+        weights["Soil Suitability"] = st.slider("Soil Suitability", 0, 50, 15, key="w_soil")
+        weights["Community Sentiment"] = st.slider("Community Sentiment", 0, 50, 10, key="w_sent")
+        weights["Land Cost"] = st.slider("Land Cost", 0, 50, 10, key="w_cost")
+
+        total_weight = sum(weights.values())
+        if total_weight != 100:
+            st.warning(f"Weights total **{total_weight}%** — should be 100%")
+        else:
+            st.success("Weights total 100%")
+
+        st.divider()
+
+        st.markdown("### Map Layers")
+        show_layers = {
+            "transmission": st.checkbox("Transmission Lines", True),
+            "substations": st.checkbox("Substations", True),
+            "wetlands": st.checkbox("Wetland Zones", True),
+            "floodplains": st.checkbox("Flood Zones", True),
+        }
+
+    # Apply scoring
+    scores_data = []
+    breakdowns = {}
+    for idx, row in df.iterrows():
+        score, bd = compute_site_score(row, weights)
+        scores_data.append(score)
+        breakdowns[row["id"]] = bd
+    df["score"] = scores_data
+
+    # ── HEADER ──
+    st.markdown("# ⚡ SiteIQ — Renewable Energy Siting Intelligence")
+    st.markdown("> Evaluate land parcels for solar and wind development using environmental, grid, pricing, and community data layers.")
+
+    # ── KPI ROW ──
+    k1, k2, k3, k4, k5 = st.columns(5)
+    with k1:
+        st.metric("Total Parcels", len(df))
+    with k2:
+        st.metric("Avg Site Score", f"{df['score'].mean():.0f}/100")
+    with k3:
+        st.metric("Total Acreage", f"{df['acres'].sum():,}")
+    with k4:
+        st.metric("Avg Node LMP", f"${df['node_lmp'].mean():.0f}/MWh")
+    with k5:
+        viable = len(df[df["score"] >= 75])
+        st.metric("Viable Sites (75+)", viable)
+
+    # ── TABS ──
+    tab_map, tab_query, tab_detail, tab_compare, tab_market, tab_report = st.tabs([
+        "Interactive Map",
+        "Developer Query",
+        "Site Deep Dive",
+        "Compare Sites",
+        "Market Analytics",
+        "Export Report",
+    ])
+
+    # ━━━━━━━━━━━━━ TAB: MAP ━━━━━━━━━━━━━
+    with tab_map:
+        st.markdown("### Interactive Siting Map")
+        st.caption("Click any parcel marker to see details. Toggle layers in the sidebar.")
+        m = build_map(df, show_layers)
+        st_folium(m, width=None, height=550, returned_objects=[])
+
+        st.markdown("### Parcel Rankings")
+        display_df = df[["name", "state", "county", "acres", "score", "project_type",
+                         "trans_dist", "node_lmp", "wetland_pct", "sentiment", "opp_risk"]].copy()
+        display_df.columns = ["Site", "State", "County", "Acres", "Score", "Project Type",
+                              "Trans. Dist (mi)", "Node LMP", "Wetland %", "Sentiment", "Opposition"]
+        display_df = display_df.sort_values("Score", ascending=False).reset_index(drop=True)
+        display_df.index += 1
+        st.dataframe(display_df, use_container_width=True, height=340)
+
+    # ━━━━━━━━━━━━━ TAB: QUERY ━━━━━━━━━━━━━
+    with tab_query:
+        st.markdown("### Developer Query Engine")
+        st.caption("Filter parcels by your development criteria.")
+
+        q1, q2, q3 = st.columns(3)
+        with q1:
+            min_acres = st.number_input("Min Acreage", 0, 5000, 200, step=50)
+            max_trans = st.number_input("Max Transmission Distance (mi)", 0.0, 20.0, 5.0, step=0.5)
+        with q2:
+            min_node = st.number_input("Min Node Price ($/MWh)", 0, 100, 35, step=5)
+            max_wetland = st.number_input("Max Wetland Coverage (%)", 0, 50, 10, step=1)
+        with q3:
+            min_score = st.number_input("Min Site Score", 0, 100, 70, step=5)
+            flood_ok = st.multiselect("Acceptable Flood Zones", ["X (Minimal)", "AE", "A"], default=["X (Minimal)", "AE"])
+
+        results = df[
+            (df["acres"] >= min_acres) &
+            (df["trans_dist"] <= max_trans) &
+            (df["node_lmp"] >= min_node) &
+            (df["wetland_pct"] <= max_wetland) &
+            (df["score"] >= min_score) &
+            (df["flood_zone"].isin(flood_ok))
+        ].sort_values("score", ascending=False)
+
+        st.markdown(f"### Results: **{len(results)}** parcels match")
+
+        if len(results) > 0:
+            for _, row in results.iterrows():
+                sc = row["score"]
+                with st.container(border=True):
+                    c1, c2, c3, c4, c5 = st.columns([3, 1, 1, 1, 1])
+                    with c1:
+                        st.markdown(f"**{row['name']}** — {row['county']} Co., {row['state']}")
+                        st.caption(f"Owner: {row['owner']} | {row['zoning']} | {row['project_type']}")
+                    with c2:
+                        st.metric("Score", f"{sc}/100")
+                    with c3:
+                        st.metric("Acres", row["acres"])
+                    with c4:
+                        st.metric("Trans. Dist", f"{row['trans_dist']} mi")
+                    with c5:
+                        st.metric("Node LMP", f"${row['node_lmp']}")
+        else:
+            st.info("No parcels match your criteria. Try relaxing your filters.")
+
+    # ━━━━━━━━━━━━━ TAB: DETAIL ━━━━━━━━━━━━━
+    with tab_detail:
+        st.markdown("### Site Deep Dive")
+        selected_site = st.selectbox("Select a parcel", df["name"].tolist(), key="detail_site")
+        p = df[df["name"] == selected_site].iloc[0]
+        bd = breakdowns[p["id"]]
+
+        sc = p["score"]
+        if sc >= 80:
+            color = "#22c55e"
+        elif sc >= 60:
+            color = "#f59e0b"
+        else:
+            color = "#ef4444"
+
+        st.markdown(f"""
+        <div style="display:flex;align-items:center;gap:24px;margin-bottom:16px">
+            <div style="font-size:4rem;font-weight:900;color:{color}">{sc}</div>
+            <div>
+                <div style="font-size:1.5rem;font-weight:700">{p['name']}</div>
+                <div style="color:#94a3b8">{p['county']} County, {p['state']} | {p['acres']} acres | {p['project_type']}</div>
+            </div>
         </div>
-      </div>
-    </div>
-  );
-}
+        """, unsafe_allow_html=True)
+
+        s1, s2 = st.columns([1, 1])
+        with s1:
+            st.markdown("#### Score Breakdown")
+            cats = list(bd.keys())
+            vals = list(bd.values())
+            fig_radar = go.Figure(go.Scatterpolar(
+                r=vals + [vals[0]], theta=cats + [cats[0]],
+                fill="toself", fillcolor="rgba(99,102,241,0.2)",
+                line=dict(color="#6366f1", width=2),
+            ))
+            fig_radar.update_layout(
+                polar=dict(
+                    bgcolor="rgba(0,0,0,0)",
+                    radialaxis=dict(visible=True, range=[0, 100], tickfont=dict(size=10)),
+                ),
+                showlegend=False, height=350,
+                margin=dict(l=60, r=60, t=30, b=30),
+                paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
+                font=dict(color="#e2e8f0"),
+            )
+            st.plotly_chart(fig_radar, use_container_width=True)
+
+        with s2:
+            st.markdown("#### Factor Scores")
+            score_df = pd.DataFrame({"Factor": cats, "Score": vals})
+            score_df = score_df.sort_values("Score", ascending=True)
+            fig_bar = px.bar(
+                score_df, x="Score", y="Factor", orientation="h",
+                color="Score", color_continuous_scale=["#ef4444", "#f59e0b", "#22c55e"],
+                range_color=[0, 100],
+            )
+            fig_bar.update_layout(
+                height=350, showlegend=False,
+                margin=dict(l=10, r=10, t=10, b=10),
+                paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
+                font=dict(color="#e2e8f0"),
+                xaxis=dict(range=[0, 100], gridcolor="#334155"),
+                yaxis=dict(gridcolor="#334155"),
+                coloraxis_showscale=False,
+            )
+            st.plotly_chart(fig_bar, use_container_width=True)
+
+        d1, d2, d3 = st.columns(3)
+        with d1:
+            st.markdown("#### Environmental")
+            st.metric("Wetland Coverage", f"{p['wetland_pct']}%")
+            st.metric("Wetland Type", p["wetland_type"])
+            st.metric("Flood Zone", p["flood_zone"])
+            st.metric("Flood Coverage", f"{p['flood_coverage']}%")
+
+        with d2:
+            st.markdown("#### Soil & Land")
+            st.metric("Soil Score", f"{p['soil_score']}/100")
+            st.metric("Drainage", p["drainage"])
+            st.metric("Hydric Soil", "Yes" if p["hydric"] else "No")
+            st.metric("Pile Suitability", p["pile_suitability"])
+            st.metric("Bedrock Depth", f"{p['bedrock_depth']} ft")
+
+        with d3:
+            st.markdown("#### Grid Access")
+            st.metric("Nearest Line", f"{p['trans_dist']} mi")
+            st.metric("Voltage", p["voltage"])
+            st.metric("Nearest Substation", f"{p['sub_dist']} mi")
+            st.metric("Interconnection", p["interconnection"])
+
+        st.divider()
+
+        p1, p2 = st.columns(2)
+        with p1:
+            st.markdown("#### Hub / Node Pricing")
+            st.metric("Hub", p["hub"])
+            st.metric("Hub LMP", f"${p['hub_lmp']}/MWh")
+            st.metric("Node", p["node"])
+            st.metric("Node LMP", f"${p['node_lmp']}/MWh")
+            st.metric("Basis Difference", f"${p['basis']}/MWh")
+            st.metric("Congestion Risk", p["congestion"])
+
+        with p2:
+            st.markdown("#### Community Sentiment")
+            if p["sentiment"] > 0:
+                sent_color = "#22c55e"
+            elif p["sentiment"] > -0.3:
+                sent_color = "#f59e0b"
+            else:
+                sent_color = "#ef4444"
+            sent_prefix = "+" if p["sentiment"] > 0 else ""
+            st.markdown(
+                f"<h2 style='color:{sent_color};margin:0'>{sent_prefix}{p['sentiment']:.2f}</h2>",
+                unsafe_allow_html=True,
+            )
+            st.metric("Opposition Risk", p["opp_risk"])
+            st.markdown("**Key Issues:**")
+            for issue in p["issues"]:
+                st.markdown(f"- {issue}")
+
+    # ━━━━━━━━━━━━━ TAB: COMPARE ━━━━━━━━━━━━━
+    with tab_compare:
+        st.markdown("### Compare Sites Side-by-Side")
+        cc1, cc2 = st.columns(2)
+        with cc1:
+            site_a = st.selectbox("Site A", df["name"].tolist(), index=0, key="cmp_a")
+        with cc2:
+            site_b = st.selectbox("Site B", df["name"].tolist(), index=3, key="cmp_b")
+
+        pa = df[df["name"] == site_a].iloc[0]
+        pb = df[df["name"] == site_b].iloc[0]
+        bda = breakdowns[pa["id"]]
+        bdb = breakdowns[pb["id"]]
+
+        cats = list(bda.keys())
+        fig_cmp = go.Figure()
+        fig_cmp.add_trace(go.Scatterpolar(
+            r=list(bda.values()) + [list(bda.values())[0]],
+            theta=cats + [cats[0]], fill="toself",
+            fillcolor="rgba(99,102,241,0.15)", line=dict(color="#6366f1", width=2),
+            name=pa["name"],
+        ))
+        fig_cmp.add_trace(go.Scatterpolar(
+            r=list(bdb.values()) + [list(bdb.values())[0]],
+            theta=cats + [cats[0]], fill="toself",
+            fillcolor="rgba(34,211,238,0.15)", line=dict(color="#22d3ee", width=2),
+            name=pb["name"],
+        ))
+        fig_cmp.update_layout(
+            polar=dict(bgcolor="rgba(0,0,0,0)", radialaxis=dict(visible=True, range=[0, 100])),
+            height=420, margin=dict(l=80, r=80, t=40, b=40),
+            paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
+            font=dict(color="#e2e8f0"), legend=dict(orientation="h", y=-0.1),
+        )
+        st.plotly_chart(fig_cmp, use_container_width=True)
+
+        metrics = [
+            ("Score", "score", "/100", False),
+            ("Acres", "acres", "", False),
+            ("Transmission Dist.", "trans_dist", " mi", True),
+            ("Node LMP", "node_lmp", " $/MWh", False),
+            ("Wetland %", "wetland_pct", "%", True),
+            ("Soil Score", "soil_score", "/100", False),
+            ("Congestion Freq.", "cong_freq", "%", True),
+            ("Sentiment", "sentiment", "", False),
+            ("Land Cost/Acre", "land_cost_acre", "", True),
+        ]
+        cmp_data = []
+        for label, key, unit, lower_better in metrics:
+            va = pa[key]
+            vb = pb[key]
+            if lower_better:
+                winner = "A" if va < vb else "B" if vb < va else "Tie"
+            else:
+                winner = "A" if va > vb else "B" if vb < va else "Tie"
+            cmp_data.append({
+                "Metric": label,
+                site_a: f"{va}{unit}",
+                site_b: f"{vb}{unit}",
+                "Better": winner,
+            })
+
+        cmp_df = pd.DataFrame(cmp_data)
+        st.dataframe(cmp_df, use_container_width=True, hide_index=True, height=370)
+
+    # ━━━━━━━━━━━━━ TAB: MARKET ━━━━━━━━━━━━━
+    with tab_market:
+        st.markdown("### Market & Congestion Analytics")
+        market_site = st.selectbox("Select site for market analysis", df["name"].tolist(), key="mkt_site")
+        pm = df[df["name"] == market_site].iloc[0]
+
+        mc1, mc2, mc3, mc4 = st.columns(4)
+        with mc1:
+            st.metric("Hub", pm["hub"])
+        with mc2:
+            st.metric("Hub LMP", f"${pm['hub_lmp']}/MWh")
+        with mc3:
+            st.metric("Node LMP", f"${pm['node_lmp']}/MWh")
+        with mc4:
+            st.metric("Basis", f"${pm['basis']}/MWh")
+
+        lmp_df = generate_lmp_history(pm["node_lmp"])
+        fig_lmp = px.area(lmp_df, x="Date", y="LMP ($/MWh)", title="Historical LMP — 12-Month Trend")
+        fig_lmp.update_traces(fillcolor="rgba(99,102,241,0.2)", line_color="#6366f1")
+        fig_lmp.update_layout(
+            height=350, paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
+            font=dict(color="#e2e8f0"), xaxis=dict(gridcolor="#334155"),
+            yaxis=dict(gridcolor="#334155"),
+        )
+        st.plotly_chart(fig_lmp, use_container_width=True)
+
+        st.markdown("#### Congestion & Curtailment Analysis")
+        cong_df = generate_congestion_data()
+        cg1, cg2 = st.columns(2)
+
+        with cg1:
+            fig_cong = px.bar(
+                cong_df, x="Month", y="Congestion Events",
+                title="Monthly Congestion Events",
+                color="Congestion Events",
+                color_continuous_scale=["#22c55e", "#f59e0b", "#ef4444"],
+            )
+            fig_cong.update_layout(
+                height=300, paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
+                font=dict(color="#e2e8f0"), xaxis=dict(gridcolor="#334155"),
+                yaxis=dict(gridcolor="#334155"), coloraxis_showscale=False,
+            )
+            st.plotly_chart(fig_cong, use_container_width=True)
+
+        with cg2:
+            fig_curt = px.line(
+                cong_df, x="Month", y="Avg Curtailment %",
+                title="Average Curtailment Rate",
+                markers=True,
+            )
+            fig_curt.update_traces(line_color="#f59e0b", marker_color="#f59e0b")
+            fig_curt.update_layout(
+                height=300, paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
+                font=dict(color="#e2e8f0"), xaxis=dict(gridcolor="#334155"),
+                yaxis=dict(gridcolor="#334155"),
+            )
+            st.plotly_chart(fig_curt, use_container_width=True)
+
+    # ━━━━━━━━━━━━━ TAB: REPORT ━━━━━━━━━━━━━
+    with tab_report:
+        st.markdown("### Export Feasibility Report")
+        report_site = st.selectbox("Select site for report", df["name"].tolist(), key="rpt_site")
+        pr = df[df["name"] == report_site].iloc[0]
+        bdr = breakdowns[pr["id"]]
+
+        breakdown_lines = "\n".join(
+            [f"  {k:.<25} {v}/100" for k, v in bdr.items()]
+        )
+        issue_lines = "\n".join([f"    - {i}" for i in pr["issues"]])
+        sent_prefix = "+" if pr["sentiment"] > 0 else ""
+
+        report_text = f"""
+================================================================
+  SITEIQ — RENEWABLE ENERGY SITE FEASIBILITY REPORT
+  Generated: {datetime.now().strftime('%Y-%m-%d %H:%M')}
+================================================================
+
+SITE: {pr['name']}
+LOCATION: {pr['county']} County, {pr['state']}
+COORDINATES: {pr['lat']}, {pr['lon']}
+ACREAGE: {pr['acres']}
+OWNER: {pr['owner']}
+ZONING: {pr['zoning']}
+LAND USE: {pr['land_use']}
+
+----------------------------------------------------------------
+OVERALL SITE SCORE: {pr['score']} / 100
+RECOMMENDED PROJECT TYPE: {pr['project_type']}
+PERMITTING RISK: {pr['permit_risk']}
+REVENUE POTENTIAL: {pr['revenue_potential']}
+----------------------------------------------------------------
+
+SCORE BREAKDOWN:
+{breakdown_lines}
+
+----------------------------------------------------------------
+ENVIRONMENTAL ANALYSIS
+----------------------------------------------------------------
+  Wetland Coverage:        {pr['wetland_pct']}%
+  Wetland Type:            {pr['wetland_type']}
+  Flood Zone:              {pr['flood_zone']}
+  Flood Coverage:          {pr['flood_coverage']}%
+
+----------------------------------------------------------------
+SOIL ANALYSIS
+----------------------------------------------------------------
+  Soil Score:              {pr['soil_score']}/100
+  Drainage Class:          {pr['drainage']}
+  Hydric Soil:             {'Yes' if pr['hydric'] else 'No'}
+  Erosion Factor:          {pr['erosion_factor']}
+  Pile Suitability:        {pr['pile_suitability']}
+  Depth to Bedrock:        {pr['bedrock_depth']} ft
+
+----------------------------------------------------------------
+TRANSMISSION & GRID ACCESS
+----------------------------------------------------------------
+  Nearest Trans. Line:     {pr['trans_dist']} miles
+  Line Voltage:            {pr['voltage']}
+  Nearest Substation:      {pr['sub_dist']} miles
+  Interconnection:         {pr['interconnection']}
+
+----------------------------------------------------------------
+HUB / NODE PRICING
+----------------------------------------------------------------
+  Trading Hub:             {pr['hub']}
+  Hub LMP:                 ${pr['hub_lmp']}/MWh
+  Pricing Node:            {pr['node']}
+  Node LMP:                ${pr['node_lmp']}/MWh
+  Basis Difference:        ${pr['basis']}/MWh
+  Congestion Risk:         {pr['congestion']}
+
+----------------------------------------------------------------
+CONGESTION ANALYTICS
+----------------------------------------------------------------
+  Congestion Frequency:    {pr['cong_freq']}%
+  Curtailment Risk:        {pr['curtail_risk']}
+  Revenue Risk:            {pr['rev_risk']}
+
+----------------------------------------------------------------
+COMMUNITY SENTIMENT
+----------------------------------------------------------------
+  Sentiment Score:         {sent_prefix}{pr['sentiment']:.2f}
+  Opposition Risk:         {pr['opp_risk']}
+  Key Issues:
+{issue_lines}
+
+----------------------------------------------------------------
+LAND ECONOMICS
+----------------------------------------------------------------
+  Land Cost (per acre):    ${pr['land_cost_acre']:,}
+  Total Land Cost Est.:    ${pr['land_cost_acre'] * pr['acres']:,}
+
+================================================================
+  Report generated by SiteIQ Renewable Energy Siting Platform
+================================================================
+"""
+        st.text_area("Report Preview", report_text, height=500)
+
+        rc1, rc2, rc3 = st.columns(3)
+        with rc1:
+            safe_name = pr["name"].replace(" ", "_")
+            st.download_button(
+                "Download Report (.txt)", report_text,
+                file_name=f"SiteIQ_Report_{safe_name}.txt",
+                mime="text/plain",
+            )
+        with rc2:
+            csv_data = df.to_csv(index=False)
+            st.download_button(
+                "Download All Sites (.csv)", csv_data,
+                file_name="SiteIQ_All_Parcels.csv", mime="text/csv",
+            )
+        with rc3:
+            geojson = {
+                "type": "FeatureCollection",
+                "features": [
+                    {
+                        "type": "Feature",
+                        "geometry": {
+                            "type": "Point",
+                            "coordinates": [float(r["lon"]), float(r["lat"])],
+                        },
+                        "properties": {
+                            k: (v if not isinstance(v, (np.integer, np.floating)) else int(v) if isinstance(v, np.integer) else float(v))
+                            for k, v in r.items()
+                            if k not in ["lat", "lon", "issues"]
+                        },
+                    }
+                    for _, r in df.iterrows()
+                ],
+            }
+            st.download_button(
+                "Download GeoJSON", json.dumps(geojson, indent=2),
+                file_name="SiteIQ_Parcels.geojson", mime="application/json",
+            )
+
+
+if __name__ == "__main__":
+    main()
