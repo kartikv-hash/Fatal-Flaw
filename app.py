@@ -3,17 +3,15 @@ import pandas as pd
 import numpy as np
 import plotly.express as px
 import plotly.graph_objects as go
-from plotly.subplots import make_subplots
 import folium
 from streamlit_folium import st_folium
 import json
-import io
 from datetime import datetime, timedelta
-import random
+from fpdf import FPDF
+import tempfile
+import os
+import base64
 
-# ──────────────────────────────────────────────
-# CONFIG
-# ──────────────────────────────────────────────
 st.set_page_config(
     page_title="SiteIQ — Renewable Energy Siting Platform",
     page_icon="⚡",
@@ -21,861 +19,790 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 
-# ──────────────────────────────────────────────
-# CUSTOM CSS
-# ──────────────────────────────────────────────
 st.markdown("""
 <style>
     @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;900&display=swap');
     .block-container { padding-top: 1rem; }
-    .metric-card {
-        background: linear-gradient(135deg, #1e293b, #0f172a);
-        border: 1px solid #334155;
-        border-radius: 12px;
-        padding: 20px;
-        text-align: center;
-    }
-    .metric-value { font-size: 2.2rem; font-weight: 900; }
-    .metric-label { font-size: 0.8rem; color: #94a3b8; text-transform: uppercase; letter-spacing: 1px; }
-    .score-high { color: #22c55e; }
-    .score-mid { color: #f59e0b; }
-    .score-low { color: #ef4444; }
-    .risk-badge {
-        display: inline-block;
-        padding: 4px 12px;
-        border-radius: 20px;
-        font-size: 0.75rem;
-        font-weight: 700;
-    }
-    .badge-low { background: #22c55e22; color: #22c55e; border: 1px solid #22c55e44; }
-    .badge-med { background: #f59e0b22; color: #f59e0b; border: 1px solid #f59e0b44; }
-    .badge-high { background: #ef444422; color: #ef4444; border: 1px solid #ef444444; }
     div[data-testid="stSidebar"] { background: #0f172a; }
-    .stTabs [data-baseweb="tab-list"] { gap: 8px; }
-    .stTabs [data-baseweb="tab"] {
-        border-radius: 8px;
-        padding: 8px 20px;
-        font-weight: 600;
-    }
+    .concern-high { background: #fee2e2; border-left: 4px solid #ef4444; padding: 12px; border-radius: 6px; margin: 8px 0; }
+    .concern-mod { background: #fef3c7; border-left: 4px solid #f59e0b; padding: 12px; border-radius: 6px; margin: 8px 0; }
+    .concern-low { background: #dcfce7; border-left: 4px solid #22c55e; padding: 12px; border-radius: 6px; margin: 8px 0; }
+    .idx-bar { height: 18px; border-radius: 4px; display: inline-block; }
 </style>
 """, unsafe_allow_html=True)
 
-# ──────────────────────────────────────────────
-# SEED DATA — PARCELS
-# ──────────────────────────────────────────────
+
+# ══════════════════════════════════════════════════
+# DATA — Modeled after LandGate + Transect reports
+# ══════════════════════════════════════════════════
 @st.cache_data
-def load_parcel_data():
-    parcels = [
+def load_sites():
+    sites = [
         {
-            "id": 1, "name": "Reeves County Solar Site", "state": "TX", "county": "Reeves",
-            "lat": 31.39, "lon": -103.69, "acres": 482, "owner": "Bar-T Ranch LLC",
-            "zoning": "Agricultural", "land_use": "Rangeland",
-            "wetland_pct": 3, "wetland_type": "None significant",
-            "flood_zone": "X (Minimal)", "flood_coverage": 2,
-            "soil_score": 91, "drainage": "Well drained", "hydric": False,
-            "erosion_factor": 0.15, "pile_suitability": "High", "bedrock_depth": 42,
-            "trans_dist": 1.8, "voltage": "345 kV", "sub_dist": 1.2, "interconnection": "High",
-            "hub": "ERCOT North Hub", "hub_lmp": 44, "node": "REEVES_345_WIND",
-            "node_lmp": 41, "basis": -3, "congestion": "Low",
-            "cong_freq": 6, "curtail_risk": "Low", "rev_risk": "Low",
-            "sentiment": 0.32, "opp_risk": "Low",
-            "issues": ["Minimal opposition", "Pro-development county"],
-            "project_type": "Utility Solar", "permit_risk": "Low", "revenue_potential": "High",
-            "land_cost_acre": 850,
+            "id": 1,
+            "name": "Runnels County Solar Site",
+            "state": "TX", "county": "Runnels",
+            "lat": 31.83, "lon": -99.98,
+            "total_acres": 872.76, "buildable_acres": 867,
+            "parcel_ids": ["R5254", "R5253", "R6335", "R21930", "R24171"],
+            "parcels": [
+                {"apn": "R5254", "address": "2059 157 CR", "acres": 624.912, "land_value": 2177},
+                {"apn": "R5253", "address": "157 CR", "acres": 14.951, "land_value": 1153},
+                {"apn": "R6335", "address": "153 EAST AVE", "acres": 87.371, "land_value": 1722},
+                {"apn": "R21930", "address": "164 CR", "acres": 122.916, "land_value": 2315},
+                {"apn": "R24171", "address": "157 CR", "acres": 22.607, "land_value": 6378},
+            ],
+            "total_land_value": 1956990, "land_value_per_acre": 2062,
+            # LandGate Value Index
+            "value_index": {
+                "Land": 37, "Solar Energy": 81, "Wind Energy": 1, "EV Charging": 12,
+                "Available Power": 22, "Energy Storage": 29, "Data Center": 33,
+                "Green Power": 60, "Carbon Credits": 10, "Carbon Sequestration": 10,
+                "Minerals": 20, "Mining": 0, "Water": 79, "Commercial & Industrial": 10,
+                "Building Suitability": 47,
+            },
+            # LandGate Risk Index
+            "risk_index": {
+                "Oil & Gas Contamination": 0, "Industrial Contamination": 0,
+                "Electricity Blackout": 78, "Cost Of Electricity": 90,
+                "Electrical Connection": 76, "Drought": 80, "Wildfire": 96,
+                "Natural Earthquakes": 19, "Induced Earthquakes": 0,
+                "Hurricane": 41, "Tornado": 91, "Straight Line Wind": 99,
+                "Hail": 78, "Flood": 47,
+            },
+            # Land details
+            "cropland_irrigation_pct": 19.833, "water_stress": 79.2,
+            "annual_precip_in": 26.4, "avg_wind_speed_mph": 17,
+            "solar_irradiance_wm2": 245, "avg_high_temp_f": 77.6,
+            "avg_low_temp_f": 52.2, "avg_slope_deg": 0.7, "max_slope_deg": 4.2,
+            # Elevation
+            "avg_elevation_ft": 1874, "min_elevation_ft": 1840, "max_elevation_ft": 1910,
+            # Land cover
+            "land_cover": [
+                {"type": "Shrubland", "acres": 532.8, "value": 0},
+                {"type": "Cropland (Winter Wheat)", "acres": 317.7, "value": 426171},
+                {"type": "Cropland (Cotton)", "acres": 66.4, "value": 102883},
+                {"type": "Developed/Open Space", "acres": 24.6, "value": 1341990},
+            ],
+            # Soil (from LandGate report)
+            "soils": [
+                {"type": "VaA", "quality": 2, "group": "C", "acres": 339.8, "desc": "Valera silty clay, 0-1% slopes", "farmland": "Conditionally Prime", "suitability": 45, "hydric": 0, "drainage": "Well drained", "bedrock_ft": 3.18},
+                {"type": "KvA", "quality": 3, "group": "D", "acres": 217, "desc": "Kavett silty clay, 0-1% slopes", "farmland": "Not Prime", "suitability": 45, "hydric": 0, "drainage": "Well drained", "bedrock_ft": 1.61},
+                {"type": "KvB", "quality": 4, "group": "D", "acres": 129.7, "desc": "Kavett silty clay, cool, 1-3% slopes", "farmland": "Not Prime", "suitability": 45, "hydric": 0, "drainage": "Well drained", "bedrock_ft": 1.57},
+                {"type": "Tk", "quality": 7, "group": "D", "acres": 117.2, "desc": "Talpa-Kavett complex", "farmland": "Not Prime", "suitability": 45, "hydric": 0, "drainage": "Well drained", "bedrock_ft": 0.59},
+                {"type": "McA", "quality": 3, "group": "D", "acres": 39.6, "desc": "Mereta clay loam, 0-1% slopes", "farmland": "Not Prime", "suitability": 45, "hydric": 0, "drainage": "Well drained", "bedrock_ft": 6.0},
+                {"type": "PoA", "quality": 2, "group": "B", "acres": 14.8, "desc": "Quanah clay loam, 0-1% slopes", "farmland": "Prime", "suitability": 100, "hydric": 0, "drainage": "Well drained", "bedrock_ft": 6.0},
+            ],
+            # Solar
+            "solar_lease_per_acre": 245, "direct_irradiance_wm2": 222,
+            "corrected_irradiance_wm2": 245, "solar_panels_possible": 567943,
+            "solar_max_capacity_mw": 256, "solar_max_annual_mwh": 296362,
+            "nearest_solar_farm": "Hanson Solar, LLC", "nearest_solar_dist_mi": 17.894,
+            # Wind
+            "wind_lease_per_acre": 34, "avg_wind_speed_ms": 7.6,
+            "wind_turbines_possible": 10.83, "wind_max_capacity_mw": 35.748,
+            "wind_max_annual_mwh": 112331,
+            "nearest_wind_farm": "Horse Hollow Wind Energy Center", "nearest_wind_dist_mi": 22.819,
+            # Electrical Infrastructure
+            "nearest_sub_name": "TALPA", "nearest_sub_dist_mi": 10.602,
+            "nearest_trans_owner": "AEP TEXAS NORTH COMPANY",
+            "nearest_trans_dist_mi": 0.72, "nearest_trans_capacity_mw": 1147,
+            "wholesale_market": "ERCOT", "state_incentives_per_mwh": 1.32,
+            # Wetlands / Property Features
+            "federal_wetland_acres": 5, "dwelling_acres": 2, "topo_5pct_acres": 1,
+            # Flood
+            "flood_risk_score": 47, "flood_zone": "Moderate",
+            # Oil & Gas
+            "oil_gas_value_per_acre": 275, "wells_on_property": 10,
+            "cumulative_oil_bbl": 407806, "cumulative_gas_mcf": 369716,
+            # Carbon
+            "soil_carbon_stocks_ton_ac": 19.385, "soil_carbon_credits_yr": 567.28,
+            # Permits (Transect-style)
+            "permits_needed": 8,
+            "federal_permits": 4, "state_permits": 4,
+            # Species concerns
+            "species_concerns": "Low",
+            "species_list": [],
+            # Community sentiment
+            "community_sentiment": "Positive",
+            "sentiment_details": ["Pro-development county", "Existing energy infrastructure", "Low population density"],
+            # Contamination
+            "nearest_superfund": "Main Street Ground Water Plume",
+            "superfund_dist_mi": 119.19,
+            "abandoned_wells": 8,
         },
         {
-            "id": 2, "name": "Kern County Solar Farm", "state": "CA", "county": "Kern",
-            "lat": 35.15, "lon": -118.75, "acres": 310, "owner": "Sunland Holdings",
-            "zoning": "Agricultural", "land_use": "Farmland",
-            "wetland_pct": 8, "wetland_type": "Freshwater Emergent",
-            "flood_zone": "AE", "flood_coverage": 10,
-            "soil_score": 78, "drainage": "Moderately drained", "hydric": False,
-            "erosion_factor": 0.28, "pile_suitability": "Moderate", "bedrock_depth": 28,
-            "trans_dist": 4.1, "voltage": "230 kV", "sub_dist": 3.5, "interconnection": "Moderate",
-            "hub": "CAISO SP15", "hub_lmp": 52, "node": "KERN_230_SOLAR",
-            "node_lmp": 46, "basis": -6, "congestion": "Medium",
-            "cong_freq": 14, "curtail_risk": "Moderate", "rev_risk": "Moderate",
-            "sentiment": -0.18, "opp_risk": "Moderate",
-            "issues": ["Wildlife corridor concerns", "Visual impact on ridgeline", "Active environmental groups"],
-            "project_type": "Utility Solar", "permit_risk": "Moderate", "revenue_potential": "High",
-            "land_cost_acre": 3200,
-        },
-        {
-            "id": 3, "name": "Logan County Wind Prospect", "state": "IL", "county": "Logan",
-            "lat": 40.12, "lon": -89.37, "acres": 520, "owner": "Heartland Ag Corp",
-            "zoning": "Agricultural", "land_use": "Cropland",
-            "wetland_pct": 18, "wetland_type": "Freshwater Forested/Shrub",
-            "flood_zone": "A", "flood_coverage": 15,
-            "soil_score": 62, "drainage": "Poorly drained", "hydric": True,
-            "erosion_factor": 0.42, "pile_suitability": "Low", "bedrock_depth": 15,
-            "trans_dist": 6.8, "voltage": "138 kV", "sub_dist": 5.4, "interconnection": "Low",
-            "hub": "MISO Indiana Hub", "hub_lmp": 36, "node": "LOGAN_138_WIND",
-            "node_lmp": 31, "basis": -5, "congestion": "High",
-            "cong_freq": 22, "curtail_risk": "High", "rev_risk": "High",
-            "sentiment": -0.45, "opp_risk": "High",
-            "issues": ["Strong local opposition", "Wetland advocacy groups", "Township moratorium pending"],
-            "project_type": "Not Recommended", "permit_risk": "High", "revenue_potential": "Low",
-            "land_cost_acre": 7800,
-        },
-        {
-            "id": 4, "name": "Custer County Wind Farm", "state": "OK", "county": "Custer",
-            "lat": 35.63, "lon": -99.00, "acres": 640, "owner": "Prairie Wind LLC",
-            "zoning": "Rural", "land_use": "Rangeland",
-            "wetland_pct": 1, "wetland_type": "None significant",
-            "flood_zone": "X (Minimal)", "flood_coverage": 0,
-            "soil_score": 88, "drainage": "Well drained", "hydric": False,
-            "erosion_factor": 0.18, "pile_suitability": "High", "bedrock_depth": 55,
-            "trans_dist": 2.4, "voltage": "345 kV", "sub_dist": 1.9, "interconnection": "High",
-            "hub": "SPP South Hub", "hub_lmp": 38, "node": "CUSTER_345_WIND",
-            "node_lmp": 35, "basis": -3, "congestion": "Low",
-            "cong_freq": 8, "curtail_risk": "Low", "rev_risk": "Low",
-            "sentiment": 0.55, "opp_risk": "Low",
-            "issues": ["Community supportive", "Existing wind development nearby", "County incentives available"],
-            "project_type": "Wind Farm", "permit_risk": "Low", "revenue_potential": "High",
-            "land_cost_acre": 620,
-        },
-        {
-            "id": 5, "name": "Chautauqua Community Solar", "state": "NY", "county": "Chautauqua",
-            "lat": 42.21, "lon": -79.43, "acres": 275, "owner": "Lake Erie Land Trust",
-            "zoning": "Mixed Use", "land_use": "Idle Farmland",
-            "wetland_pct": 12, "wetland_type": "Freshwater Emergent",
-            "flood_zone": "AE", "flood_coverage": 8,
-            "soil_score": 70, "drainage": "Moderately drained", "hydric": False,
-            "erosion_factor": 0.32, "pile_suitability": "Moderate", "bedrock_depth": 20,
-            "trans_dist": 5.5, "voltage": "230 kV", "sub_dist": 4.2, "interconnection": "Moderate",
-            "hub": "NYISO Zone A", "hub_lmp": 48, "node": "CHAUT_230_SOLAR",
-            "node_lmp": 42, "basis": -6, "congestion": "Medium",
-            "cong_freq": 16, "curtail_risk": "Moderate", "rev_risk": "Moderate",
-            "sentiment": -0.30, "opp_risk": "Moderate",
-            "issues": ["Lakeshore viewshed concerns", "Active environmental groups", "Supportive town board"],
-            "project_type": "Community Solar", "permit_risk": "Moderate", "revenue_potential": "Moderate",
-            "land_cost_acre": 4500,
-        },
-        {
-            "id": 6, "name": "Pecos County Solar Mega", "state": "TX", "county": "Pecos",
-            "lat": 30.94, "lon": -102.41, "acres": 1200, "owner": "TransPecos Energy LP",
-            "zoning": "Agricultural", "land_use": "Rangeland",
-            "wetland_pct": 1, "wetland_type": "None significant",
-            "flood_zone": "X (Minimal)", "flood_coverage": 1,
-            "soil_score": 89, "drainage": "Well drained", "hydric": False,
-            "erosion_factor": 0.12, "pile_suitability": "High", "bedrock_depth": 60,
-            "trans_dist": 2.1, "voltage": "345 kV", "sub_dist": 1.5, "interconnection": "High",
-            "hub": "ERCOT West Hub", "hub_lmp": 42, "node": "PECOS_345_SOLAR",
-            "node_lmp": 39, "basis": -3, "congestion": "Low",
-            "cong_freq": 7, "curtail_risk": "Low", "rev_risk": "Low",
-            "sentiment": 0.41, "opp_risk": "Low",
-            "issues": ["Strong local support", "Existing solar infrastructure", "Tax abatement available"],
-            "project_type": "Utility Solar", "permit_risk": "Low", "revenue_potential": "High",
-            "land_cost_acre": 450,
-        },
-        {
-            "id": 7, "name": "Sumner County Wind", "state": "KS", "county": "Sumner",
-            "lat": 37.18, "lon": -97.47, "acres": 890, "owner": "Great Plains Wind Co.",
-            "zoning": "Agricultural", "land_use": "Cropland",
-            "wetland_pct": 4, "wetland_type": "Riverine",
-            "flood_zone": "X (Minimal)", "flood_coverage": 3,
-            "soil_score": 84, "drainage": "Well drained", "hydric": False,
-            "erosion_factor": 0.21, "pile_suitability": "High", "bedrock_depth": 48,
-            "trans_dist": 3.0, "voltage": "345 kV", "sub_dist": 2.3, "interconnection": "High",
-            "hub": "SPP North Hub", "hub_lmp": 35, "node": "SUMNER_345_WIND",
-            "node_lmp": 33, "basis": -2, "congestion": "Low",
-            "cong_freq": 9, "curtail_risk": "Low", "rev_risk": "Low",
-            "sentiment": 0.48, "opp_risk": "Low",
-            "issues": ["Supportive county commission", "Wind energy heritage area"],
-            "project_type": "Wind Farm", "permit_risk": "Low", "revenue_potential": "High",
-            "land_cost_acre": 1100,
-        },
-        {
-            "id": 8, "name": "Imperial Valley Solar", "state": "CA", "county": "Imperial",
-            "lat": 32.85, "lon": -115.57, "acres": 750, "owner": "Desert Sun Ventures",
-            "zoning": "Agricultural", "land_use": "Desert Scrub",
-            "wetland_pct": 2, "wetland_type": "None significant",
-            "flood_zone": "X (Minimal)", "flood_coverage": 1,
-            "soil_score": 82, "drainage": "Excessively drained", "hydric": False,
-            "erosion_factor": 0.35, "pile_suitability": "Moderate", "bedrock_depth": 35,
-            "trans_dist": 3.8, "voltage": "500 kV", "sub_dist": 2.8, "interconnection": "High",
-            "hub": "CAISO SP15", "hub_lmp": 55, "node": "IMPERIAL_500_SOLAR",
-            "node_lmp": 50, "basis": -5, "congestion": "Medium",
-            "cong_freq": 12, "curtail_risk": "Moderate", "rev_risk": "Moderate",
-            "sentiment": 0.10, "opp_risk": "Low",
-            "issues": ["Some dust concerns", "Generally supportive", "Existing solar neighbors"],
-            "project_type": "Utility Solar", "permit_risk": "Low", "revenue_potential": "High",
-            "land_cost_acre": 1800,
+            "id": 2,
+            "name": "Benton County Solar (BENTON 100MW)",
+            "state": "MN", "county": "Benton",
+            "lat": 45.592, "lon": -94.028,
+            "total_acres": 996.64, "buildable_acres": 0,
+            "parcel_ids": ["090016900", "090037900", "090033000", "090037801"],
+            "parcels": [
+                {"apn": "090016900", "address": "2100 65TH AVE NE", "acres": 245.797, "land_value": 0, "owner": "ALLEN J BAUERLY REV TR"},
+                {"apn": "090037900", "address": "928 65TH AVE NE", "acres": 156.303, "land_value": 0, "owner": "PEGGY JO BESSER REV TR"},
+                {"apn": "090033000", "address": "6223 HIGHWAY 95 NE", "acres": 127.498, "land_value": 0, "owner": "LORIN E BESSER"},
+                {"apn": "090037801", "address": "709 75TH AVE NE", "acres": 121.431, "land_value": 0, "owner": "MCIVER FAMILY TR"},
+                {"apn": "090039600", "address": "763 55TH AVE NE", "acres": 81.055, "land_value": 0, "owner": "JOHN J SVIHEL"},
+            ],
+            "total_land_value": 0, "land_value_per_acre": 0,
+            "value_index": {
+                "Land": 30, "Solar Energy": 65, "Wind Energy": 40, "EV Charging": 8,
+                "Available Power": 35, "Energy Storage": 25, "Data Center": 20,
+                "Green Power": 50, "Carbon Credits": 15, "Carbon Sequestration": 20,
+                "Minerals": 5, "Mining": 0, "Water": 70, "Commercial & Industrial": 15,
+                "Building Suitability": 40,
+            },
+            "risk_index": {
+                "Oil & Gas Contamination": 0, "Industrial Contamination": 5,
+                "Electricity Blackout": 45, "Cost Of Electricity": 60,
+                "Electrical Connection": 55, "Drought": 30, "Wildfire": 15,
+                "Natural Earthquakes": 5, "Induced Earthquakes": 0,
+                "Hurricane": 5, "Tornado": 65, "Straight Line Wind": 70,
+                "Hail": 55, "Flood": 35,
+            },
+            "cropland_irrigation_pct": 5.0, "water_stress": 30.0,
+            "annual_precip_in": 32.0, "avg_wind_speed_mph": 12,
+            "solar_irradiance_wm2": 180, "avg_high_temp_f": 58.0,
+            "avg_low_temp_f": 32.0, "avg_slope_deg": 2.0, "max_slope_deg": 16.0,
+            "avg_elevation_ft": 1050, "min_elevation_ft": 1010, "max_elevation_ft": 1100,
+            "land_cover": [
+                {"type": "Cultivated Crops", "acres": 776.2, "value": 0},
+                {"type": "Deciduous Forest", "acres": 136.0, "value": 0},
+                {"type": "Pasture/Hay", "acres": 49.6, "value": 0},
+                {"type": "Developed, Low Intensity", "acres": 11.9, "value": 0},
+                {"type": "Woody Wetlands", "acres": 8.3, "value": 0},
+            ],
+            "soils": [
+                {"type": "Ronneby loam", "quality": 3, "group": "C/D", "acres": 180, "desc": "0-2% slopes, stony", "farmland": "Not Prime", "suitability": 55, "hydric": 0, "drainage": "Somewhat poorly drained", "bedrock_ft": 6.0},
+                {"type": "Hubbard loamy sand", "quality": 2, "group": "A", "acres": 150, "desc": "0-2% slopes", "farmland": "Not Prime", "suitability": 70, "hydric": 0, "drainage": "Excessively drained", "bedrock_ft": 6.0},
+                {"type": "Verndale sandy loam", "quality": 2, "group": "A", "acres": 120, "desc": "acid substratum, 0-2% slopes", "farmland": "Prime", "suitability": 80, "hydric": 0, "drainage": "Well drained", "bedrock_ft": 6.0},
+                {"type": "St. Francis-Mahtomedi", "quality": 3, "group": "A", "acres": 100, "desc": "6-12% slopes complex", "farmland": "Not Prime", "suitability": 40, "hydric": 0, "drainage": "Somewhat excessively drained", "bedrock_ft": 6.0},
+                {"type": "Seelyeville/Markey", "quality": 5, "group": "A/D", "acres": 60, "desc": "depressional, 0-1% slopes", "farmland": "Not Prime", "suitability": 15, "hydric": 1, "drainage": "Very poorly drained", "bedrock_ft": 6.0},
+            ],
+            "solar_lease_per_acre": 200, "direct_irradiance_wm2": 165,
+            "corrected_irradiance_wm2": 180, "solar_panels_possible": 450000,
+            "solar_max_capacity_mw": 100, "solar_max_annual_mwh": 175000,
+            "nearest_solar_farm": "N/A", "nearest_solar_dist_mi": 0,
+            "wind_lease_per_acre": 50, "avg_wind_speed_ms": 5.4,
+            "wind_turbines_possible": 8, "wind_max_capacity_mw": 24,
+            "wind_max_annual_mwh": 65000,
+            "nearest_wind_farm": "N/A", "nearest_wind_dist_mi": 0,
+            "nearest_sub_name": "On-site Substation", "nearest_sub_dist_mi": 0.42,
+            "nearest_trans_owner": "On Site", "nearest_trans_dist_mi": 0.0,
+            "nearest_trans_capacity_mw": 0,
+            "wholesale_market": "MISO", "state_incentives_per_mwh": 0,
+            "federal_wetland_acres": 47.64, "dwelling_acres": 0, "topo_5pct_acres": 30,
+            "flood_risk_score": 35, "flood_zone": "X / A (64 ac)",
+            "oil_gas_value_per_acre": 0, "wells_on_property": 0,
+            "cumulative_oil_bbl": 0, "cumulative_gas_mcf": 0,
+            "soil_carbon_stocks_ton_ac": 0, "soil_carbon_credits_yr": 0,
+            "permits_needed": 13, "federal_permits": 6, "state_permits": 7,
+            "species_concerns": "High",
+            "species_list": [
+                {"name": "Northern Long-Eared Bat", "scientific": "Myotis septentrionalis", "status": "Endangered", "concern": "Species of Concern"},
+                {"name": "Monarch butterfly", "scientific": "Danaus plexippus", "status": "Proposed Threatened", "concern": "Species of Concern"},
+                {"name": "Bald Eagle", "scientific": "Haliaeetus leucocephalus", "status": "Recovery", "concern": "May Occur"},
+                {"name": "Suckley's cuckoo bumble bee", "scientific": "Bombus suckleyi", "status": "Under Review", "concern": "May Occur"},
+            ],
+            "community_sentiment": "Mixed",
+            "sentiment_details": ["Benton County: Positive", "Minden Township: Positive", "St. George Township: Unsure", "In Energy Community: Yes"],
+            "nearest_superfund": "N/A", "superfund_dist_mi": 0, "abandoned_wells": 0,
         },
     ]
-    return pd.DataFrame(parcels)
+    return sites
 
 
-# ──────────────────────────────────────────────
+# ══════════════════════════════════════════════════
 # SCORING ENGINE
-# ──────────────────────────────────────────────
-def compute_site_score(row, weights):
-    trans_score = max(0, 100 - (row["trans_dist"] / 10) * 100)
-    price_score = min(100, (row["node_lmp"] / 60) * 100)
-    wet_score = max(0, 100 - row["wetland_pct"] * 5)
-    flood_map = {"X (Minimal)": 100, "AE": 55, "A": 25}
-    flood_score = flood_map.get(row["flood_zone"], 50)
-    soil_score = row["soil_score"]
-    sent_score = (row["sentiment"] + 1) / 2 * 100
-    cost_score = max(0, 100 - (row["land_cost_acre"] / 10000) * 100)
+# ══════════════════════════════════════════════════
+def compute_site_score(s, weights):
+    vi = s["value_index"]
+    ri = s["risk_index"]
+    solar_s = min(100, vi.get("Solar Energy", 0))
+    trans_s = max(0, 100 - s["nearest_trans_dist_mi"] * 10)
+    wet_s = max(0, 100 - (s["federal_wetland_acres"] / max(s["total_acres"], 1)) * 500)
+    flood_s = max(0, 100 - ri.get("Flood", 50))
+    soil_s = np.mean([x["suitability"] for x in s["soils"]]) if s["soils"] else 50
+    sent_s = {"Positive": 90, "Mixed": 55, "Unsure": 40, "Negative": 15}.get(s["community_sentiment"], 50)
+    cost_s = max(0, 100 - (s.get("land_value_per_acre", 0) / 100))
 
     total = (
-        trans_score * weights["Transmission Proximity"] / 100
-        + price_score * weights["Node Pricing"] / 100
-        + wet_score * weights["Wetland Risk"] / 100
-        + flood_score * weights["Flood Risk"] / 100
-        + soil_score * weights["Soil Suitability"] / 100
-        + sent_score * weights["Community Sentiment"] / 100
-        + cost_score * weights["Land Cost"] / 100
+        trans_s * weights["Transmission Proximity"] / 100
+        + solar_s * weights["Solar Resource"] / 100
+        + wet_s * weights["Wetland Risk"] / 100
+        + flood_s * weights["Flood Risk"] / 100
+        + soil_s * weights["Soil Suitability"] / 100
+        + sent_s * weights["Community Sentiment"] / 100
+        + cost_s * weights["Land Cost"] / 100
     )
-    return round(total), {
-        "Transmission": round(trans_score),
-        "Pricing": round(price_score),
-        "Wetland": round(wet_score),
-        "Flood": round(flood_score),
-        "Soil": round(soil_score),
-        "Sentiment": round(sent_score),
-        "Land Cost": round(cost_score),
-    }
+    bd = {"Transmission": round(trans_s), "Solar Resource": round(solar_s), "Wetland": round(wet_s),
+          "Flood": round(flood_s), "Soil": round(soil_s), "Sentiment": round(sent_s), "Land Cost": round(cost_s)}
+    return round(total), bd
 
 
 def generate_lmp_history(base, days=365):
     np.random.seed(42)
     dates = [datetime(2024, 1, 1) + timedelta(days=i) for i in range(days)]
-    prices = base + np.cumsum(np.random.randn(days) * 1.5)
-    prices = np.clip(prices, 5, 150)
-    seasonal = 8 * np.sin(np.linspace(0, 2 * np.pi, days))
-    prices = prices + seasonal
+    prices = base + np.cumsum(np.random.randn(days) * 1.2)
+    prices = np.clip(prices + 8 * np.sin(np.linspace(0, 2 * np.pi, days)), 5, 120)
     return pd.DataFrame({"Date": dates, "LMP ($/MWh)": np.round(prices, 2)})
 
 
-def generate_congestion_data():
-    months = pd.date_range("2024-01", periods=12, freq="MS").strftime("%b %Y").tolist()
-    return pd.DataFrame({
-        "Month": months,
-        "Congestion Events": np.random.randint(2, 30, 12),
-        "Avg Curtailment %": np.round(np.random.uniform(1, 18, 12), 1),
-        "Revenue Impact ($k)": np.round(np.random.uniform(-50, -2, 12), 1),
-    })
+# ══════════════════════════════════════════════════
+# PDF REPORT GENERATOR
+# ══════════════════════════════════════════════════
+class SiteIQPDF(FPDF):
+    def header(self):
+        self.set_font("Helvetica", "B", 14)
+        self.cell(0, 10, "SiteIQ - Renewable Energy Site Feasibility Report", border=False, ln=True, align="C")
+        self.set_draw_color(99, 102, 241)
+        self.line(10, 18, 200, 18)
+        self.ln(5)
+
+    def footer(self):
+        self.set_y(-15)
+        self.set_font("Helvetica", "I", 8)
+        self.set_text_color(128)
+        self.cell(0, 10, f"Page {self.page_no()}/{{nb}} | Generated {datetime.now().strftime('%Y-%m-%d %H:%M')} | SiteIQ Platform", align="C")
+
+    def section_title(self, title):
+        self.set_font("Helvetica", "B", 12)
+        self.set_fill_color(30, 41, 59)
+        self.set_text_color(255)
+        self.cell(0, 8, f"  {title}", fill=True, ln=True)
+        self.set_text_color(0)
+        self.ln(2)
+
+    def kv_row(self, key, value):
+        self.set_font("Helvetica", "", 10)
+        self.cell(80, 6, key, border=0)
+        self.set_font("Helvetica", "B", 10)
+        self.cell(0, 6, str(value), border=0, ln=True)
+
+    def table_header(self, cols, widths):
+        self.set_font("Helvetica", "B", 9)
+        self.set_fill_color(226, 232, 240)
+        for i, col in enumerate(cols):
+            self.cell(widths[i], 7, col, border=1, fill=True, align="C")
+        self.ln()
+
+    def table_row(self, vals, widths):
+        self.set_font("Helvetica", "", 8)
+        for i, val in enumerate(vals):
+            self.cell(widths[i], 6, str(val), border=1, align="C")
+        self.ln()
 
 
-# ──────────────────────────────────────────────
-# MAP BUILDER
-# ──────────────────────────────────────────────
-def build_map(df, show_layers):
-    m = folium.Map(location=[37.5, -96], zoom_start=5, tiles=None)
-    folium.TileLayer(
-        tiles="https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png",
-        attr="CartoDB", name="Dark Basemap", control=False,
-    ).add_to(m)
+def generate_pdf(s, score, bd):
+    pdf = SiteIQPDF()
+    pdf.alias_nb_pages()
+    pdf.set_auto_page_break(auto=True, margin=20)
+
+    # Page 1 — Cover + Summary
+    pdf.add_page()
+    pdf.set_font("Helvetica", "B", 22)
+    pdf.cell(0, 15, s["name"], ln=True, align="C")
+    pdf.set_font("Helvetica", "", 12)
+    pdf.cell(0, 8, f"{s['county']} County, {s['state']}", ln=True, align="C")
+    pdf.cell(0, 8, f"Report Date: {datetime.now().strftime('%B %d, %Y')}", ln=True, align="C")
+    pdf.cell(0, 8, f"Project Type: Renewable Energy Generation (Solar)", ln=True, align="C")
+    pdf.ln(10)
+
+    # Key Details
+    pdf.section_title("Key Details")
+    pdf.kv_row("Total Acreage", f"{s['total_acres']:,.2f}")
+    pdf.kv_row("Buildable Acreage", f"{s['buildable_acres']:,}")
+    pdf.kv_row("Site Score", f"{score}/100")
+    pdf.kv_row("Nearest Transmission Line", f"{s['nearest_trans_dist_mi']} miles ({s['nearest_trans_owner']})")
+    pdf.kv_row("Nearest Substation", f"{s['nearest_sub_dist_mi']} miles ({s['nearest_sub_name']})")
+    pdf.kv_row("Wholesale Market", s["wholesale_market"])
+    pdf.kv_row("Permits Needed", f"{s['permits_needed']} ({s['federal_permits']} Federal, {s['state_permits']} State)")
+    pdf.kv_row("Landowners", f"{len(s['parcels'])} landowners")
+    pdf.kv_row("Community Sentiment", s["community_sentiment"])
+    pdf.kv_row("Species Concern Level", s["species_concerns"])
+    pdf.ln(5)
+
+    # Concerns Summary
+    pdf.section_title("Concerns Summary")
+    concern_map = {"High": "HIGH CONCERN", "Moderate": "MODERATE CONCERN", "Low": "LOW CONCERN"}
+    pdf.kv_row("Federally Protected Species", concern_map.get(s["species_concerns"], "Low"))
+    pdf.kv_row("Waters / Wetlands", f"{s['federal_wetland_acres']} acres federal wetland")
+    pdf.kv_row("Flood Risk", s["flood_zone"])
+    pdf.kv_row("Environmental Compliance", f"Abandoned wells: {s['abandoned_wells']}")
+    pdf.ln(3)
+
+    # Score Breakdown
+    pdf.section_title("Site Score Breakdown")
+    for k, v in bd.items():
+        pdf.kv_row(k, f"{v}/100")
+    pdf.ln(3)
+
+    # Value Index
+    pdf.add_page()
+    pdf.section_title("Value Index (LandGate-Style)")
+    cols = ["Category", "Score /100"]
+    widths = [100, 50]
+    pdf.table_header(cols, widths)
+    for k, v in s["value_index"].items():
+        pdf.table_row([k, str(v)], widths)
+    pdf.ln(5)
+
+    # Risk Index
+    pdf.section_title("Risk Index (LandGate-Style)")
+    pdf.table_header(cols, widths)
+    for k, v in s["risk_index"].items():
+        pdf.table_row([k, str(v)], widths)
+
+    # Land & Topo
+    pdf.add_page()
+    pdf.section_title("Land & Topography")
+    pdf.kv_row("Total Land Value", f"${s['total_land_value']:,} (${s['land_value_per_acre']:,}/ac)")
+    pdf.kv_row("Avg Elevation", f"{s['avg_elevation_ft']:,} ft")
+    pdf.kv_row("Min / Max Elevation", f"{s['min_elevation_ft']:,} / {s['max_elevation_ft']:,} ft")
+    pdf.kv_row("Avg Slope", f"{s['avg_slope_deg']}°")
+    pdf.kv_row("Max Slope", f"{s['max_slope_deg']}°")
+    pdf.kv_row("Annual Precipitation", f"{s['annual_precip_in']}\"")
+    pdf.kv_row("Avg Wind Speed", f"{s['avg_wind_speed_mph']} mph")
+    pdf.kv_row("Solar Irradiance", f"{s['solar_irradiance_wm2']} W/m²")
+    pdf.kv_row("Avg High / Low Temp", f"{s['avg_high_temp_f']}°F / {s['avg_low_temp_f']}°F")
+    pdf.ln(5)
+
+    # Land Cover
+    pdf.section_title("Land Cover")
+    lc_cols = ["Type", "Acres", "Value ($)"]
+    lc_w = [80, 35, 40]
+    pdf.table_header(lc_cols, lc_w)
+    for lc in s["land_cover"]:
+        pdf.table_row([lc["type"], f"{lc['acres']:.1f}", f"${lc['value']:,}"], lc_w)
+    pdf.ln(5)
+
+    # Soils
+    pdf.section_title("Soil Analysis")
+    soil_cols = ["Type", "Acres", "Quality", "Group", "Suit.", "Hydric", "Drainage", "Bedrock"]
+    soil_w = [28, 18, 16, 14, 14, 16, 45, 20]
+    pdf.table_header(soil_cols, soil_w)
+    for soil in s["soils"]:
+        pdf.table_row([
+            soil["type"], f"{soil['acres']:.0f}", str(soil["quality"]),
+            soil["group"], str(soil["suitability"]),
+            "Yes" if soil["hydric"] else "No", soil["drainage"],
+            f"{soil['bedrock_ft']}ft"
+        ], soil_w)
+    pdf.ln(5)
+
+    # Solar
+    pdf.add_page()
+    pdf.section_title("Solar Farm Analysis")
+    pdf.kv_row("Est. Solar Lease", f"${s['solar_lease_per_acre']}/ac/yr")
+    pdf.kv_row("Direct Solar Irradiance", f"{s['direct_irradiance_wm2']} W/m²")
+    pdf.kv_row("Corrected Irradiance", f"{s['corrected_irradiance_wm2']} W/m²")
+    pdf.kv_row("Possible Solar Panels", f"{s['solar_panels_possible']:,}")
+    pdf.kv_row("Max Capacity", f"{s['solar_max_capacity_mw']} MW")
+    pdf.kv_row("Max Annual Output", f"{s['solar_max_annual_mwh']:,} MWh")
+    pdf.kv_row("Nearest Solar Farm", f"{s['nearest_solar_farm']} ({s['nearest_solar_dist_mi']} mi)")
+    pdf.ln(5)
+
+    # Wind
+    pdf.section_title("Wind Analysis")
+    pdf.kv_row("Est. Wind Lease", f"${s['wind_lease_per_acre']}/ac/yr")
+    pdf.kv_row("Avg Wind Speed", f"{s['avg_wind_speed_ms']} m/s")
+    pdf.kv_row("Possible Turbines", str(s["wind_turbines_possible"]))
+    pdf.kv_row("Max Capacity", f"{s['wind_max_capacity_mw']} MW")
+    pdf.kv_row("Max Annual Output", f"{s['wind_max_annual_mwh']:,} MWh")
+    pdf.ln(5)
+
+    # Electrical Infrastructure
+    pdf.section_title("Electrical Infrastructure")
+    pdf.kv_row("Nearest Substation", f"{s['nearest_sub_name']} — {s['nearest_sub_dist_mi']} mi")
+    pdf.kv_row("Nearest Transmission Line", f"{s['nearest_trans_owner']} — {s['nearest_trans_dist_mi']} mi")
+    pdf.kv_row("Transmission Capacity", f"{s['nearest_trans_capacity_mw']} MW")
+    pdf.kv_row("Wholesale Market", s["wholesale_market"])
+    pdf.kv_row("State/Local Incentives", f"{s['state_incentives_per_mwh']} $/MWh")
+    pdf.ln(5)
+
+    # Waters & Flood
+    pdf.section_title("Waters, Wetlands & Floodplains")
+    pdf.kv_row("Federal Wetland Acres", f"{s['federal_wetland_acres']} ac")
+    pdf.kv_row("Flood Zone", s["flood_zone"])
+    pdf.kv_row("Flood Risk Score", f"{s['flood_risk_score']}/100")
+    pdf.ln(5)
+
+    # Species
+    if s["species_list"]:
+        pdf.section_title("Protected Species")
+        sp_cols = ["Name", "Status", "Concern Level"]
+        sp_w = [70, 45, 45]
+        pdf.table_header(sp_cols, sp_w)
+        for sp in s["species_list"]:
+            pdf.table_row([sp["name"], sp["status"], sp["concern"]], sp_w)
+        pdf.ln(5)
+
+    # Parcels
+    pdf.add_page()
+    pdf.section_title("Parcel Details")
+    p_cols = ["APN", "Address", "Acres", "Land Value"]
+    p_w = [35, 65, 30, 35]
+    pdf.table_header(p_cols, p_w)
+    for p in s["parcels"]:
+        pdf.table_row([p["apn"], p["address"], f"{p['acres']:.1f}", f"${p['land_value']:,}"], p_w)
+    pdf.ln(5)
+
+    # Community Sentiment
+    pdf.section_title("Community Sentiment")
+    pdf.kv_row("Overall Sentiment", s["community_sentiment"])
+    for detail in s["sentiment_details"]:
+        pdf.set_font("Helvetica", "", 9)
+        pdf.cell(0, 5, f"  - {detail}", ln=True)
+    pdf.ln(5)
+
+    # Oil & Gas (if applicable)
+    if s["wells_on_property"] > 0:
+        pdf.section_title("Oil & Gas")
+        pdf.kv_row("Estimated O&G Value", f"${s['oil_gas_value_per_acre']}/acre")
+        pdf.kv_row("Wells on Property", str(s["wells_on_property"]))
+        pdf.kv_row("Cumulative Oil", f"{s['cumulative_oil_bbl']:,} bbl")
+        pdf.kv_row("Cumulative Gas", f"{s['cumulative_gas_mcf']:,} Mcf")
+
+    # Footer
+    pdf.add_page()
+    pdf.set_font("Helvetica", "B", 14)
+    pdf.cell(0, 20, "", ln=True)
+    pdf.cell(0, 10, "Report generated by SiteIQ Renewable Energy Siting Platform", ln=True, align="C")
+    pdf.set_font("Helvetica", "", 10)
+    pdf.cell(0, 8, "This report combines LandGate property analysis and Transect environmental screening methodologies.", ln=True, align="C")
+    pdf.cell(0, 8, "Data sources: USGS, USFWS, FEMA, NRCS, ERCOT, MISO, EPA, LandGate, Transect", ln=True, align="C")
+
+    return pdf.output()
+
+
+# ══════════════════════════════════════════════════
+# MAP
+# ══════════════════════════════════════════════════
+def build_map(sites, scores, show_layers):
+    m = folium.Map(location=[38.5, -96], zoom_start=5, tiles=None)
+    folium.TileLayer(tiles="https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png", attr="CartoDB", name="Dark", control=False).add_to(m)
 
     if show_layers.get("transmission"):
-        trans_group = folium.FeatureGroup(name="Transmission Lines")
-        lines = [
-            [[31.0, -104.0], [32.5, -101.0], [34.0, -99.0]],
-            [[35.0, -119.0], [36.0, -117.5], [37.0, -116.0]],
-            [[39.0, -90.0], [40.5, -89.0], [42.0, -88.0]],
-            [[35.0, -99.5], [36.5, -98.0], [37.5, -97.0]],
-            [[41.0, -80.0], [42.0, -79.5], [43.0, -78.5]],
-            [[32.5, -116.0], [33.5, -115.0], [34.5, -114.0]],
-        ]
-        for line in lines:
-            folium.PolyLine(line, color="#f59e0b", weight=3, opacity=0.7,
-                            dash_array="8 4").add_to(trans_group)
-        trans_group.add_to(m)
+        tg = folium.FeatureGroup(name="Transmission Lines")
+        for s in sites:
+            if s["nearest_trans_dist_mi"] < 50:
+                folium.PolyLine([[s["lat"], s["lon"] - 0.15], [s["lat"] + 0.1, s["lon"] + 0.15]], color="#f59e0b", weight=3, opacity=0.7, dash_array="8 4").add_to(tg)
+        tg.add_to(m)
 
     if show_layers.get("substations"):
-        sub_group = folium.FeatureGroup(name="Substations")
-        subs = [
-            (31.5, -103.0, "Pecos Sub 345kV"), (35.5, -118.0, "Kern Sub 230kV"),
-            (40.0, -89.5, "Lincoln Sub 138kV"), (35.8, -99.2, "Custer Sub 345kV"),
-            (42.3, -79.5, "Erie Sub 230kV"), (33.0, -115.5, "Imperial Sub 500kV"),
-            (37.2, -97.5, "Sumner Sub 345kV"),
-        ]
-        for lat, lon, name in subs:
-            folium.CircleMarker(
-                [lat, lon], radius=8, color="#f97316", fill=True,
-                fill_color="#f97316", fill_opacity=0.8,
-                popup=folium.Popup(f"<b>{name}</b>", max_width=200), tooltip=name,
-            ).add_to(sub_group)
-        sub_group.add_to(m)
+        sg = folium.FeatureGroup(name="Substations")
+        for s in sites:
+            folium.CircleMarker([s["lat"] + 0.05, s["lon"] + 0.05], radius=7, color="#f97316", fill=True, fill_color="#f97316", fill_opacity=0.8, tooltip=s["nearest_sub_name"]).add_to(sg)
+        sg.add_to(m)
 
     if show_layers.get("wetlands"):
-        wet_group = folium.FeatureGroup(name="Wetland Zones")
-        for _, row in df[df["wetland_pct"] > 5].iterrows():
-            folium.Circle(
-                [row["lat"], row["lon"]], radius=8000,
-                color="#22d3ee", fill=True, fill_color="#22d3ee",
-                fill_opacity=0.15, weight=1,
-                tooltip=f"Wetland area near {row['name']} ({row['wetland_pct']}%)",
-            ).add_to(wet_group)
-        wet_group.add_to(m)
+        wg = folium.FeatureGroup(name="Wetlands")
+        for s in sites:
+            if s["federal_wetland_acres"] > 3:
+                folium.Circle([s["lat"], s["lon"]], radius=s["federal_wetland_acres"] * 20, color="#22d3ee", fill=True, fill_color="#22d3ee", fill_opacity=0.15, tooltip=f"{s['federal_wetland_acres']} ac wetlands").add_to(wg)
+        wg.add_to(m)
 
-    if show_layers.get("floodplains"):
-        flood_group = folium.FeatureGroup(name="Flood Zones")
-        for _, row in df[df["flood_coverage"] > 5].iterrows():
-            folium.Circle(
-                [row["lat"], row["lon"]], radius=6000,
-                color="#60a5fa", fill=True, fill_color="#60a5fa",
-                fill_opacity=0.15, weight=1,
-                tooltip=f"Flood Zone {row['flood_zone']} - {row['flood_coverage']}% coverage",
-            ).add_to(flood_group)
-        flood_group.add_to(m)
-
-    for _, row in df.iterrows():
-        score = row.get("score", 50)
-        if score >= 80:
-            color = "#22c55e"
-        elif score >= 60:
-            color = "#f59e0b"
-        else:
-            color = "#ef4444"
-
-        popup_html = f"""
-        <div style="font-family:Inter,sans-serif;min-width:220px">
-            <h4 style="margin:0 0 8px;color:{color}">{row['name']}</h4>
-            <table style="font-size:12px;width:100%">
-                <tr><td><b>Score</b></td><td style="color:{color};font-weight:900;font-size:18px">{score}/100</td></tr>
-                <tr><td><b>Acres</b></td><td>{row['acres']}</td></tr>
-                <tr><td><b>Type</b></td><td>{row['project_type']}</td></tr>
-                <tr><td><b>Trans. Dist</b></td><td>{row['trans_dist']} mi</td></tr>
-                <tr><td><b>Node LMP</b></td><td>${row['node_lmp']}/MWh</td></tr>
-                <tr><td><b>Wetlands</b></td><td>{row['wetland_pct']}%</td></tr>
-                <tr><td><b>Sentiment</b></td><td>{row['sentiment']}</td></tr>
-            </table>
-        </div>
-        """
-        folium.CircleMarker(
-            [row["lat"], row["lon"]], radius=12 + score / 10,
-            color=color, fill=True, fill_color=color,
-            fill_opacity=0.6, weight=2,
-            popup=folium.Popup(popup_html, max_width=280),
-            tooltip=f"{row['name']} - Score: {score}",
-        ).add_to(m)
+    for s in sites:
+        sc = scores.get(s["id"], 50)
+        color = "#22c55e" if sc >= 75 else "#f59e0b" if sc >= 50 else "#ef4444"
+        popup = f"""<div style='min-width:240px;font-family:sans-serif'>
+            <h4 style='color:{color};margin:0'>{s['name']}</h4>
+            <table style='font-size:12px'>
+            <tr><td><b>Score</b></td><td style='color:{color};font-size:16px;font-weight:900'>{sc}/100</td></tr>
+            <tr><td><b>Acres</b></td><td>{s['total_acres']:,.1f}</td></tr>
+            <tr><td><b>Trans Dist</b></td><td>{s['nearest_trans_dist_mi']} mi</td></tr>
+            <tr><td><b>Wetlands</b></td><td>{s['federal_wetland_acres']} ac</td></tr>
+            <tr><td><b>Species</b></td><td>{s['species_concerns']}</td></tr>
+            <tr><td><b>Sentiment</b></td><td>{s['community_sentiment']}</td></tr>
+            </table></div>"""
+        folium.CircleMarker([s["lat"], s["lon"]], radius=14, color=color, fill=True, fill_color=color, fill_opacity=0.6, weight=2, popup=folium.Popup(popup, max_width=300), tooltip=f"{s['name']} — {sc}/100").add_to(m)
 
     folium.LayerControl(collapsed=False).add_to(m)
     return m
 
 
-# ──────────────────────────────────────────────
-# MAIN APP
-# ──────────────────────────────────────────────
-def main():
-    df = load_parcel_data()
+# ══════════════════════════════════════════════════
+# INDEX BAR CHART helper
+# ══════════════════════════════════════════════════
+def index_bar_chart(data, title, color_scale):
+    df = pd.DataFrame({"Category": list(data.keys()), "Score": list(data.values())})
+    df = df.sort_values("Score", ascending=True)
+    fig = px.bar(df, x="Score", y="Category", orientation="h", color="Score", color_continuous_scale=color_scale, range_color=[0, 100])
+    fig.update_layout(height=max(300, len(data) * 28), showlegend=False, margin=dict(l=10, r=10, t=30, b=10), paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)", font=dict(color="#e2e8f0", size=11), xaxis=dict(range=[0, 100], gridcolor="#334155"), yaxis=dict(gridcolor="#334155"), coloraxis_showscale=False, title=title)
+    return fig
 
-    # ── SIDEBAR ──
+
+# ══════════════════════════════════════════════════
+# MAIN APP
+# ══════════════════════════════════════════════════
+def main():
+    sites = load_sites()
+
     with st.sidebar:
         st.markdown("## ⚡ SiteIQ")
         st.caption("Renewable Energy Siting Intelligence Platform")
+        st.caption("Powered by LandGate + Transect Methodology")
         st.divider()
-
         st.markdown("### Scoring Weights")
-        st.caption("Adjust weights for the multi-factor scoring engine (must total 100%)")
-
         weights = {}
-        weights["Transmission Proximity"] = st.slider("Transmission Proximity", 0, 50, 25, key="w_trans")
-        weights["Node Pricing"] = st.slider("Node Pricing", 0, 50, 15, key="w_price")
-        weights["Wetland Risk"] = st.slider("Wetland Risk", 0, 50, 15, key="w_wet")
-        weights["Flood Risk"] = st.slider("Flood Risk", 0, 50, 10, key="w_flood")
-        weights["Soil Suitability"] = st.slider("Soil Suitability", 0, 50, 15, key="w_soil")
-        weights["Community Sentiment"] = st.slider("Community Sentiment", 0, 50, 10, key="w_sent")
-        weights["Land Cost"] = st.slider("Land Cost", 0, 50, 10, key="w_cost")
-
-        total_weight = sum(weights.values())
-        if total_weight != 100:
-            st.warning(f"Weights total **{total_weight}%** — should be 100%")
+        weights["Transmission Proximity"] = st.slider("Transmission Proximity", 0, 40, 20)
+        weights["Solar Resource"] = st.slider("Solar Resource", 0, 40, 20)
+        weights["Wetland Risk"] = st.slider("Wetland Risk", 0, 40, 15)
+        weights["Flood Risk"] = st.slider("Flood Risk", 0, 40, 10)
+        weights["Soil Suitability"] = st.slider("Soil Suitability", 0, 40, 15)
+        weights["Community Sentiment"] = st.slider("Community Sentiment", 0, 40, 10)
+        weights["Land Cost"] = st.slider("Land Cost", 0, 40, 10)
+        tw = sum(weights.values())
+        if tw != 100:
+            st.warning(f"Weights total **{tw}%** — should be 100%")
         else:
             st.success("Weights total 100%")
-
         st.divider()
-
         st.markdown("### Map Layers")
-        show_layers = {
-            "transmission": st.checkbox("Transmission Lines", True),
-            "substations": st.checkbox("Substations", True),
-            "wetlands": st.checkbox("Wetland Zones", True),
-            "floodplains": st.checkbox("Flood Zones", True),
-        }
+        show_layers = {"transmission": st.checkbox("Transmission Lines", True), "substations": st.checkbox("Substations", True), "wetlands": st.checkbox("Wetlands", True)}
 
-    # Apply scoring
-    scores_data = []
+    scores = {}
     breakdowns = {}
-    for idx, row in df.iterrows():
-        score, bd = compute_site_score(row, weights)
-        scores_data.append(score)
-        breakdowns[row["id"]] = bd
-    df["score"] = scores_data
+    for s in sites:
+        sc, bd = compute_site_score(s, weights)
+        scores[s["id"]] = sc
+        breakdowns[s["id"]] = bd
 
-    # ── HEADER ──
     st.markdown("# ⚡ SiteIQ — Renewable Energy Siting Intelligence")
-    st.markdown("> Evaluate land parcels for solar and wind development using environmental, grid, pricing, and community data layers.")
+    st.markdown("> Modeled after **LandGate Property Reports** and **Transect Environmental Screening**")
 
-    # ── KPI ROW ──
-    k1, k2, k3, k4, k5 = st.columns(5)
-    with k1:
-        st.metric("Total Parcels", len(df))
-    with k2:
-        st.metric("Avg Site Score", f"{df['score'].mean():.0f}/100")
-    with k3:
-        st.metric("Total Acreage", f"{df['acres'].sum():,}")
-    with k4:
-        st.metric("Avg Node LMP", f"${df['node_lmp'].mean():.0f}/MWh")
-    with k5:
-        viable = len(df[df["score"] >= 75])
-        st.metric("Viable Sites (75+)", viable)
+    k1, k2, k3, k4 = st.columns(4)
+    with k1: st.metric("Sites Analyzed", len(sites))
+    with k2: st.metric("Total Acreage", f"{sum(s['total_acres'] for s in sites):,.0f}")
+    with k3: st.metric("Avg Score", f"{np.mean(list(scores.values())):.0f}/100")
+    with k4: st.metric("Permits Flagged", sum(s["permits_needed"] for s in sites))
 
-    # ── TABS ──
-    tab_map, tab_query, tab_detail, tab_compare, tab_market, tab_report = st.tabs([
-        "Interactive Map",
-        "Developer Query",
-        "Site Deep Dive",
-        "Compare Sites",
-        "Market Analytics",
-        "Export Report",
-    ])
+    tab_map, tab_site, tab_env, tab_infra, tab_compare, tab_export = st.tabs(["Map", "Site Report", "Environmental", "Infrastructure", "Compare", "Export PDF"])
 
-    # ━━━━━━━━━━━━━ TAB: MAP ━━━━━━━━━━━━━
+    # ── MAP ──
     with tab_map:
         st.markdown("### Interactive Siting Map")
-        st.caption("Click any parcel marker to see details. Toggle layers in the sidebar.")
-        m = build_map(df, show_layers)
-        st_folium(m, width=None, height=550, returned_objects=[])
+        m = build_map(sites, scores, show_layers)
+        st_folium(m, width=None, height=520, returned_objects=[])
+        rdf = pd.DataFrame([{"Site": s["name"], "State": s["state"], "Acres": s["total_acres"], "Score": scores[s["id"]], "Species": s["species_concerns"], "Permits": s["permits_needed"], "Sentiment": s["community_sentiment"]} for s in sites]).sort_values("Score", ascending=False)
+        rdf.index = range(1, len(rdf) + 1)
+        st.dataframe(rdf, use_container_width=True)
 
-        st.markdown("### Parcel Rankings")
-        display_df = df[["name", "state", "county", "acres", "score", "project_type",
-                         "trans_dist", "node_lmp", "wetland_pct", "sentiment", "opp_risk"]].copy()
-        display_df.columns = ["Site", "State", "County", "Acres", "Score", "Project Type",
-                              "Trans. Dist (mi)", "Node LMP", "Wetland %", "Sentiment", "Opposition"]
-        display_df = display_df.sort_values("Score", ascending=False).reset_index(drop=True)
-        display_df.index += 1
-        st.dataframe(display_df, use_container_width=True, height=340)
+    # ── SITE REPORT ──
+    with tab_site:
+        sel = st.selectbox("Select Site", [s["name"] for s in sites], key="site_sel")
+        s = [x for x in sites if x["name"] == sel][0]
+        sc = scores[s["id"]]
+        bd = breakdowns[s["id"]]
+        color = "#22c55e" if sc >= 75 else "#f59e0b" if sc >= 50 else "#ef4444"
 
-    # ━━━━━━━━━━━━━ TAB: QUERY ━━━━━━━━━━━━━
-    with tab_query:
-        st.markdown("### Developer Query Engine")
-        st.caption("Filter parcels by your development criteria.")
+        st.markdown(f"""<div style='display:flex;align-items:center;gap:24px;margin-bottom:16px'>
+            <div style='font-size:4rem;font-weight:900;color:{color}'>{sc}</div>
+            <div><div style='font-size:1.5rem;font-weight:700'>{s['name']}</div>
+            <div style='color:#94a3b8'>{s['county']} County, {s['state']} | {s['total_acres']:,.1f} acres | {s['buildable_acres']:,} buildable</div></div></div>""", unsafe_allow_html=True)
 
-        q1, q2, q3 = st.columns(3)
-        with q1:
-            min_acres = st.number_input("Min Acreage", 0, 5000, 200, step=50)
-            max_trans = st.number_input("Max Transmission Distance (mi)", 0.0, 20.0, 5.0, step=0.5)
-        with q2:
-            min_node = st.number_input("Min Node Price ($/MWh)", 0, 100, 35, step=5)
-            max_wetland = st.number_input("Max Wetland Coverage (%)", 0, 50, 10, step=1)
-        with q3:
-            min_score = st.number_input("Min Site Score", 0, 100, 70, step=5)
-            flood_ok = st.multiselect("Acceptable Flood Zones", ["X (Minimal)", "AE", "A"], default=["X (Minimal)", "AE"])
+        # Concerns summary (Transect style)
+        st.markdown("### Concerns Summary")
+        cmap = {"High": "concern-high", "Moderate": "concern-mod", "Low": "concern-low"}
+        c1, c2, c3 = st.columns(3)
+        with c1:
+            cls = cmap.get(s["species_concerns"], "concern-low")
+            st.markdown(f"<div class='{cls}'><b>Protected Species</b><br>{s['species_concerns']} Concern<br>{len(s['species_list'])} species flagged</div>", unsafe_allow_html=True)
+        with c2:
+            wcls = "concern-high" if s["federal_wetland_acres"] > 30 else "concern-mod" if s["federal_wetland_acres"] > 10 else "concern-low"
+            st.markdown(f"<div class='{wcls}'><b>Waters / Wetlands</b><br>{s['federal_wetland_acres']} ac wetlands<br>Flood: {s['flood_zone']}</div>", unsafe_allow_html=True)
+        with c3:
+            pcls = "concern-high" if s["permits_needed"] > 10 else "concern-mod" if s["permits_needed"] > 5 else "concern-low"
+            st.markdown(f"<div class='{pcls}'><b>Permits Required</b><br>{s['permits_needed']} total<br>{s['federal_permits']} Federal, {s['state_permits']} State</div>", unsafe_allow_html=True)
 
-        results = df[
-            (df["acres"] >= min_acres) &
-            (df["trans_dist"] <= max_trans) &
-            (df["node_lmp"] >= min_node) &
-            (df["wetland_pct"] <= max_wetland) &
-            (df["score"] >= min_score) &
-            (df["flood_zone"].isin(flood_ok))
-        ].sort_values("score", ascending=False)
+        # Value + Risk Indexes side by side
+        st.markdown("### Value & Risk Indexes")
+        vi_col, ri_col = st.columns(2)
+        with vi_col:
+            st.plotly_chart(index_bar_chart(s["value_index"], "Value Index", ["#ef4444", "#f59e0b", "#22c55e"]), use_container_width=True)
+        with ri_col:
+            st.plotly_chart(index_bar_chart(s["risk_index"], "Risk Index", ["#22c55e", "#f59e0b", "#ef4444"]), use_container_width=True)
 
-        st.markdown(f"### Results: **{len(results)}** parcels match")
+        # Parcels
+        st.markdown("### Parcel Details")
+        pdf_data = s["parcels"]
+        pdf_df = pd.DataFrame(pdf_data)
+        st.dataframe(pdf_df, use_container_width=True, hide_index=True)
 
-        if len(results) > 0:
-            for _, row in results.iterrows():
-                sc = row["score"]
-                with st.container(border=True):
-                    c1, c2, c3, c4, c5 = st.columns([3, 1, 1, 1, 1])
-                    with c1:
-                        st.markdown(f"**{row['name']}** — {row['county']} Co., {row['state']}")
-                        st.caption(f"Owner: {row['owner']} | {row['zoning']} | {row['project_type']}")
-                    with c2:
-                        st.metric("Score", f"{sc}/100")
-                    with c3:
-                        st.metric("Acres", row["acres"])
-                    with c4:
-                        st.metric("Trans. Dist", f"{row['trans_dist']} mi")
-                    with c5:
-                        st.metric("Node LMP", f"${row['node_lmp']}")
-        else:
-            st.info("No parcels match your criteria. Try relaxing your filters.")
+        # Land & Topo
+        st.markdown("### Land & Topography")
+        l1, l2, l3, l4 = st.columns(4)
+        with l1: st.metric("Avg Elevation", f"{s['avg_elevation_ft']:,} ft")
+        with l2: st.metric("Avg Slope", f"{s['avg_slope_deg']}°")
+        with l3: st.metric("Solar Irradiance", f"{s['solar_irradiance_wm2']} W/m²")
+        with l4: st.metric("Avg Wind", f"{s['avg_wind_speed_mph']} mph")
 
-    # ━━━━━━━━━━━━━ TAB: DETAIL ━━━━━━━━━━━━━
-    with tab_detail:
-        st.markdown("### Site Deep Dive")
-        selected_site = st.selectbox("Select a parcel", df["name"].tolist(), key="detail_site")
-        p = df[df["name"] == selected_site].iloc[0]
-        bd = breakdowns[p["id"]]
+        lc_df = pd.DataFrame(s["land_cover"])
+        fig_lc = px.pie(lc_df, values="acres", names="type", title="Land Cover", hole=0.4, color_discrete_sequence=px.colors.qualitative.Set3)
+        fig_lc.update_layout(height=350, paper_bgcolor="rgba(0,0,0,0)", font=dict(color="#e2e8f0"))
+        st.plotly_chart(fig_lc, use_container_width=True)
 
-        sc = p["score"]
-        if sc >= 80:
-            color = "#22c55e"
-        elif sc >= 60:
-            color = "#f59e0b"
-        else:
-            color = "#ef4444"
+    # ── ENVIRONMENTAL ──
+    with tab_env:
+        sel2 = st.selectbox("Select Site", [s["name"] for s in sites], key="env_sel")
+        s = [x for x in sites if x["name"] == sel2][0]
 
-        st.markdown(f"""
-        <div style="display:flex;align-items:center;gap:24px;margin-bottom:16px">
-            <div style="font-size:4rem;font-weight:900;color:{color}">{sc}</div>
-            <div>
-                <div style="font-size:1.5rem;font-weight:700">{p['name']}</div>
-                <div style="color:#94a3b8">{p['county']} County, {p['state']} | {p['acres']} acres | {p['project_type']}</div>
-            </div>
-        </div>
-        """, unsafe_allow_html=True)
+        st.markdown("### Soil Analysis")
+        soil_df = pd.DataFrame(s["soils"])
+        soil_df.columns = ["Type", "Quality", "Group", "Acres", "Description", "Farmland", "Suitability", "Hydric", "Drainage", "Bedrock (ft)"]
+        soil_df["Hydric"] = soil_df["Hydric"].map({0: "No", 1: "Yes"})
+        st.dataframe(soil_df, use_container_width=True, hide_index=True)
 
-        s1, s2 = st.columns([1, 1])
+        s1, s2 = st.columns(2)
         with s1:
-            st.markdown("#### Score Breakdown")
-            cats = list(bd.keys())
-            vals = list(bd.values())
-            fig_radar = go.Figure(go.Scatterpolar(
-                r=vals + [vals[0]], theta=cats + [cats[0]],
-                fill="toself", fillcolor="rgba(99,102,241,0.2)",
-                line=dict(color="#6366f1", width=2),
-            ))
-            fig_radar.update_layout(
-                polar=dict(
-                    bgcolor="rgba(0,0,0,0)",
-                    radialaxis=dict(visible=True, range=[0, 100], tickfont=dict(size=10)),
-                ),
-                showlegend=False, height=350,
-                margin=dict(l=60, r=60, t=30, b=30),
-                paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
-                font=dict(color="#e2e8f0"),
-            )
-            st.plotly_chart(fig_radar, use_container_width=True)
-
+            fig_soil = px.bar(soil_df, x="Type", y="Suitability", color="Suitability", color_continuous_scale=["#ef4444", "#f59e0b", "#22c55e"], range_color=[0, 100], title="Soil Suitability Score")
+            fig_soil.update_layout(height=300, paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)", font=dict(color="#e2e8f0"), coloraxis_showscale=False)
+            st.plotly_chart(fig_soil, use_container_width=True)
         with s2:
-            st.markdown("#### Factor Scores")
-            score_df = pd.DataFrame({"Factor": cats, "Score": vals})
-            score_df = score_df.sort_values("Score", ascending=True)
-            fig_bar = px.bar(
-                score_df, x="Score", y="Factor", orientation="h",
-                color="Score", color_continuous_scale=["#ef4444", "#f59e0b", "#22c55e"],
-                range_color=[0, 100],
-            )
-            fig_bar.update_layout(
-                height=350, showlegend=False,
-                margin=dict(l=10, r=10, t=10, b=10),
-                paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
-                font=dict(color="#e2e8f0"),
-                xaxis=dict(range=[0, 100], gridcolor="#334155"),
-                yaxis=dict(gridcolor="#334155"),
-                coloraxis_showscale=False,
-            )
-            st.plotly_chart(fig_bar, use_container_width=True)
+            fig_bed = px.bar(soil_df, x="Type", y="Bedrock (ft)", title="Depth to Bedrock (ft)", color="Bedrock (ft)", color_continuous_scale=["#fbbf24", "#22c55e"])
+            fig_bed.update_layout(height=300, paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)", font=dict(color="#e2e8f0"), coloraxis_showscale=False)
+            st.plotly_chart(fig_bed, use_container_width=True)
 
-        d1, d2, d3 = st.columns(3)
-        with d1:
-            st.markdown("#### Environmental")
-            st.metric("Wetland Coverage", f"{p['wetland_pct']}%")
-            st.metric("Wetland Type", p["wetland_type"])
-            st.metric("Flood Zone", p["flood_zone"])
-            st.metric("Flood Coverage", f"{p['flood_coverage']}%")
+        # Species
+        st.markdown("### Protected Species (Transect-Style)")
+        if s["species_list"]:
+            for sp in s["species_list"]:
+                concern_cls = "concern-high" if sp["concern"] == "Species of Concern" else "concern-mod"
+                st.markdown(f"""<div class='{concern_cls}'>
+                    <b>{sp['name']}</b> (<i>{sp['scientific']}</i>)<br>
+                    Federal Status: <b>{sp['status']}</b> | Transect Assessment: <b>{sp['concern']}</b>
+                </div>""", unsafe_allow_html=True)
+        else:
+            st.success("No protected species of concern identified.")
 
-        with d2:
-            st.markdown("#### Soil & Land")
-            st.metric("Soil Score", f"{p['soil_score']}/100")
-            st.metric("Drainage", p["drainage"])
-            st.metric("Hydric Soil", "Yes" if p["hydric"] else "No")
-            st.metric("Pile Suitability", p["pile_suitability"])
-            st.metric("Bedrock Depth", f"{p['bedrock_depth']} ft")
+        # Wetlands + Flood
+        st.markdown("### Wetlands & Floodplains")
+        w1, w2, w3 = st.columns(3)
+        with w1: st.metric("Federal Wetland", f"{s['federal_wetland_acres']} ac")
+        with w2: st.metric("Flood Zone", s["flood_zone"])
+        with w3: st.metric("Flood Risk Score", f"{s['flood_risk_score']}/100")
 
-        with d3:
-            st.markdown("#### Grid Access")
-            st.metric("Nearest Line", f"{p['trans_dist']} mi")
-            st.metric("Voltage", p["voltage"])
-            st.metric("Nearest Substation", f"{p['sub_dist']} mi")
-            st.metric("Interconnection", p["interconnection"])
+        # Community
+        st.markdown("### Community Sentiment")
+        st.metric("Overall", s["community_sentiment"])
+        for d in s["sentiment_details"]:
+            st.markdown(f"- {d}")
 
-        st.divider()
+    # ── INFRASTRUCTURE ──
+    with tab_infra:
+        sel3 = st.selectbox("Select Site", [s["name"] for s in sites], key="infra_sel")
+        s = [x for x in sites if x["name"] == sel3][0]
 
-        p1, p2 = st.columns(2)
-        with p1:
-            st.markdown("#### Hub / Node Pricing")
-            st.metric("Hub", p["hub"])
-            st.metric("Hub LMP", f"${p['hub_lmp']}/MWh")
-            st.metric("Node", p["node"])
-            st.metric("Node LMP", f"${p['node_lmp']}/MWh")
-            st.metric("Basis Difference", f"${p['basis']}/MWh")
-            st.metric("Congestion Risk", p["congestion"])
+        st.markdown("### Electrical Infrastructure")
+        e1, e2, e3 = st.columns(3)
+        with e1:
+            st.metric("Nearest Substation", s["nearest_sub_name"])
+            st.metric("Distance", f"{s['nearest_sub_dist_mi']} mi")
+        with e2:
+            st.metric("Nearest Trans. Line", s["nearest_trans_owner"])
+            st.metric("Distance", f"{s['nearest_trans_dist_mi']} mi")
+        with e3:
+            st.metric("Capacity", f"{s['nearest_trans_capacity_mw']} MW")
+            st.metric("Market", s["wholesale_market"])
 
-        with p2:
-            st.markdown("#### Community Sentiment")
-            if p["sentiment"] > 0:
-                sent_color = "#22c55e"
-            elif p["sentiment"] > -0.3:
-                sent_color = "#f59e0b"
-            else:
-                sent_color = "#ef4444"
-            sent_prefix = "+" if p["sentiment"] > 0 else ""
-            st.markdown(
-                f"<h2 style='color:{sent_color};margin:0'>{sent_prefix}{p['sentiment']:.2f}</h2>",
-                unsafe_allow_html=True,
-            )
-            st.metric("Opposition Risk", p["opp_risk"])
-            st.markdown("**Key Issues:**")
-            for issue in p["issues"]:
-                st.markdown(f"- {issue}")
+        st.markdown("### Solar Farm Potential")
+        so1, so2, so3, so4 = st.columns(4)
+        with so1: st.metric("Lease Rate", f"${s['solar_lease_per_acre']}/ac/yr")
+        with so2: st.metric("Max Capacity", f"{s['solar_max_capacity_mw']} MW")
+        with so3: st.metric("Annual Output", f"{s['solar_max_annual_mwh']:,} MWh")
+        with so4: st.metric("Solar Panels", f"{s['solar_panels_possible']:,}")
 
-    # ━━━━━━━━━━━━━ TAB: COMPARE ━━━━━━━━━━━━━
-    with tab_compare:
-        st.markdown("### Compare Sites Side-by-Side")
-        cc1, cc2 = st.columns(2)
-        with cc1:
-            site_a = st.selectbox("Site A", df["name"].tolist(), index=0, key="cmp_a")
-        with cc2:
-            site_b = st.selectbox("Site B", df["name"].tolist(), index=3, key="cmp_b")
+        st.markdown("### Wind Potential")
+        wi1, wi2, wi3, wi4 = st.columns(4)
+        with wi1: st.metric("Lease Rate", f"${s['wind_lease_per_acre']}/ac/yr")
+        with wi2: st.metric("Max Capacity", f"{s['wind_max_capacity_mw']} MW")
+        with wi3: st.metric("Annual Output", f"{s['wind_max_annual_mwh']:,} MWh")
+        with wi4: st.metric("Wind Speed", f"{s['avg_wind_speed_ms']} m/s")
 
-        pa = df[df["name"] == site_a].iloc[0]
-        pb = df[df["name"] == site_b].iloc[0]
-        bda = breakdowns[pa["id"]]
-        bdb = breakdowns[pb["id"]]
-
-        cats = list(bda.keys())
-        fig_cmp = go.Figure()
-        fig_cmp.add_trace(go.Scatterpolar(
-            r=list(bda.values()) + [list(bda.values())[0]],
-            theta=cats + [cats[0]], fill="toself",
-            fillcolor="rgba(99,102,241,0.15)", line=dict(color="#6366f1", width=2),
-            name=pa["name"],
-        ))
-        fig_cmp.add_trace(go.Scatterpolar(
-            r=list(bdb.values()) + [list(bdb.values())[0]],
-            theta=cats + [cats[0]], fill="toself",
-            fillcolor="rgba(34,211,238,0.15)", line=dict(color="#22d3ee", width=2),
-            name=pb["name"],
-        ))
-        fig_cmp.update_layout(
-            polar=dict(bgcolor="rgba(0,0,0,0)", radialaxis=dict(visible=True, range=[0, 100])),
-            height=420, margin=dict(l=80, r=80, t=40, b=40),
-            paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
-            font=dict(color="#e2e8f0"), legend=dict(orientation="h", y=-0.1),
-        )
-        st.plotly_chart(fig_cmp, use_container_width=True)
-
-        metrics = [
-            ("Score", "score", "/100", False),
-            ("Acres", "acres", "", False),
-            ("Transmission Dist.", "trans_dist", " mi", True),
-            ("Node LMP", "node_lmp", " $/MWh", False),
-            ("Wetland %", "wetland_pct", "%", True),
-            ("Soil Score", "soil_score", "/100", False),
-            ("Congestion Freq.", "cong_freq", "%", True),
-            ("Sentiment", "sentiment", "", False),
-            ("Land Cost/Acre", "land_cost_acre", "", True),
-        ]
-        cmp_data = []
-        for label, key, unit, lower_better in metrics:
-            va = pa[key]
-            vb = pb[key]
-            if lower_better:
-                winner = "A" if va < vb else "B" if vb < va else "Tie"
-            else:
-                winner = "A" if va > vb else "B" if vb < va else "Tie"
-            cmp_data.append({
-                "Metric": label,
-                site_a: f"{va}{unit}",
-                site_b: f"{vb}{unit}",
-                "Better": winner,
-            })
-
-        cmp_df = pd.DataFrame(cmp_data)
-        st.dataframe(cmp_df, use_container_width=True, hide_index=True, height=370)
-
-    # ━━━━━━━━━━━━━ TAB: MARKET ━━━━━━━━━━━━━
-    with tab_market:
-        st.markdown("### Market & Congestion Analytics")
-        market_site = st.selectbox("Select site for market analysis", df["name"].tolist(), key="mkt_site")
-        pm = df[df["name"] == market_site].iloc[0]
-
-        mc1, mc2, mc3, mc4 = st.columns(4)
-        with mc1:
-            st.metric("Hub", pm["hub"])
-        with mc2:
-            st.metric("Hub LMP", f"${pm['hub_lmp']}/MWh")
-        with mc3:
-            st.metric("Node LMP", f"${pm['node_lmp']}/MWh")
-        with mc4:
-            st.metric("Basis", f"${pm['basis']}/MWh")
-
-        lmp_df = generate_lmp_history(pm["node_lmp"])
-        fig_lmp = px.area(lmp_df, x="Date", y="LMP ($/MWh)", title="Historical LMP — 12-Month Trend")
+        # LMP Chart
+        st.markdown("### Historical LMP Pricing")
+        base_lmp = 35 if s["wholesale_market"] == "ERCOT" else 28
+        lmp_df = generate_lmp_history(base_lmp)
+        fig_lmp = px.area(lmp_df, x="Date", y="LMP ($/MWh)", title=f"{s['wholesale_market']} Node — 12-Month LMP")
         fig_lmp.update_traces(fillcolor="rgba(99,102,241,0.2)", line_color="#6366f1")
-        fig_lmp.update_layout(
-            height=350, paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
-            font=dict(color="#e2e8f0"), xaxis=dict(gridcolor="#334155"),
-            yaxis=dict(gridcolor="#334155"),
-        )
+        fig_lmp.update_layout(height=300, paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)", font=dict(color="#e2e8f0"), xaxis=dict(gridcolor="#334155"), yaxis=dict(gridcolor="#334155"))
         st.plotly_chart(fig_lmp, use_container_width=True)
 
-        st.markdown("#### Congestion & Curtailment Analysis")
-        cong_df = generate_congestion_data()
-        cg1, cg2 = st.columns(2)
+        if s["wells_on_property"] > 0:
+            st.markdown("### Oil & Gas")
+            st.metric("Wells on Property", s["wells_on_property"])
+            st.metric("Cumulative Oil", f"{s['cumulative_oil_bbl']:,} bbl")
+            st.metric("Cumulative Gas", f"{s['cumulative_gas_mcf']:,} Mcf")
 
-        with cg1:
-            fig_cong = px.bar(
-                cong_df, x="Month", y="Congestion Events",
-                title="Monthly Congestion Events",
-                color="Congestion Events",
-                color_continuous_scale=["#22c55e", "#f59e0b", "#ef4444"],
-            )
-            fig_cong.update_layout(
-                height=300, paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
-                font=dict(color="#e2e8f0"), xaxis=dict(gridcolor="#334155"),
-                yaxis=dict(gridcolor="#334155"), coloraxis_showscale=False,
-            )
-            st.plotly_chart(fig_cong, use_container_width=True)
+    # ── COMPARE ──
+    with tab_compare:
+        st.markdown("### Side-by-Side Comparison")
+        cc1, cc2 = st.columns(2)
+        with cc1: sa_name = st.selectbox("Site A", [s["name"] for s in sites], index=0, key="cmp_a")
+        with cc2: sb_name = st.selectbox("Site B", [s["name"] for s in sites], index=min(1, len(sites) - 1), key="cmp_b")
+        sa = [x for x in sites if x["name"] == sa_name][0]
+        sb = [x for x in sites if x["name"] == sb_name][0]
+        bda = breakdowns[sa["id"]]
+        bdb = breakdowns[sb["id"]]
+        cats = list(bda.keys())
 
-        with cg2:
-            fig_curt = px.line(
-                cong_df, x="Month", y="Avg Curtailment %",
-                title="Average Curtailment Rate",
-                markers=True,
-            )
-            fig_curt.update_traces(line_color="#f59e0b", marker_color="#f59e0b")
-            fig_curt.update_layout(
-                height=300, paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
-                font=dict(color="#e2e8f0"), xaxis=dict(gridcolor="#334155"),
-                yaxis=dict(gridcolor="#334155"),
-            )
-            st.plotly_chart(fig_curt, use_container_width=True)
+        fig_cmp = go.Figure()
+        fig_cmp.add_trace(go.Scatterpolar(r=list(bda.values()) + [list(bda.values())[0]], theta=cats + [cats[0]], fill="toself", fillcolor="rgba(99,102,241,0.15)", line=dict(color="#6366f1", width=2), name=sa["name"]))
+        fig_cmp.add_trace(go.Scatterpolar(r=list(bdb.values()) + [list(bdb.values())[0]], theta=cats + [cats[0]], fill="toself", fillcolor="rgba(34,211,238,0.15)", line=dict(color="#22d3ee", width=2), name=sb["name"]))
+        fig_cmp.update_layout(polar=dict(bgcolor="rgba(0,0,0,0)", radialaxis=dict(visible=True, range=[0, 100])), height=420, paper_bgcolor="rgba(0,0,0,0)", font=dict(color="#e2e8f0"), legend=dict(orientation="h", y=-0.1))
+        st.plotly_chart(fig_cmp, use_container_width=True)
 
-    # ━━━━━━━━━━━━━ TAB: REPORT ━━━━━━━━━━━━━
-    with tab_report:
-        st.markdown("### Export Feasibility Report")
-        report_site = st.selectbox("Select site for report", df["name"].tolist(), key="rpt_site")
-        pr = df[df["name"] == report_site].iloc[0]
-        bdr = breakdowns[pr["id"]]
+        cmp_metrics = [
+            ("Site Score", scores[sa["id"]], scores[sb["id"]], False),
+            ("Total Acres", sa["total_acres"], sb["total_acres"], False),
+            ("Buildable Acres", sa["buildable_acres"], sb["buildable_acres"], False),
+            ("Trans. Distance (mi)", sa["nearest_trans_dist_mi"], sb["nearest_trans_dist_mi"], True),
+            ("Wetland Acres", sa["federal_wetland_acres"], sb["federal_wetland_acres"], True),
+            ("Solar Capacity (MW)", sa["solar_max_capacity_mw"], sb["solar_max_capacity_mw"], False),
+            ("Permits Needed", sa["permits_needed"], sb["permits_needed"], True),
+            ("Flood Risk Score", sa["flood_risk_score"], sb["flood_risk_score"], True),
+        ]
+        cmp_data = []
+        for label, va, vb, lower_better in cmp_metrics:
+            winner = "A" if (va < vb if lower_better else va > vb) else "B" if (vb < va if lower_better else vb > va) else "Tie"
+            cmp_data.append({"Metric": label, sa_name: va, sb_name: vb, "Better": winner})
+        st.dataframe(pd.DataFrame(cmp_data), use_container_width=True, hide_index=True)
 
-        breakdown_lines = "\n".join(
-            [f"  {k:.<25} {v}/100" for k, v in bdr.items()]
-        )
-        issue_lines = "\n".join([f"    - {i}" for i in pr["issues"]])
-        sent_prefix = "+" if pr["sentiment"] > 0 else ""
+    # ── EXPORT PDF ──
+    with tab_export:
+        st.markdown("### Export Feasibility Report (PDF)")
+        st.caption("Generate a professional PDF report modeled after LandGate Property Reports and Transect Environmental Screening.")
+        sel4 = st.selectbox("Select Site", [s["name"] for s in sites], key="pdf_sel")
+        s = [x for x in sites if x["name"] == sel4][0]
+        sc = scores[s["id"]]
+        bd = breakdowns[s["id"]]
 
-        report_text = f"""
-================================================================
-  SITEIQ — RENEWABLE ENERGY SITE FEASIBILITY REPORT
-  Generated: {datetime.now().strftime('%Y-%m-%d %H:%M')}
-================================================================
+        if st.button("Generate PDF Report", type="primary"):
+            with st.spinner("Generating report..."):
+                pdf_bytes = generate_pdf(s, sc, bd)
+                safe = s["name"].replace(" ", "_")
+                st.download_button(
+                    label="Download PDF Report",
+                    data=pdf_bytes,
+                    file_name=f"SiteIQ_Report_{safe}_{datetime.now().strftime('%Y%m%d')}.pdf",
+                    mime="application/pdf",
+                )
+            st.success("Report generated successfully!")
 
-SITE: {pr['name']}
-LOCATION: {pr['county']} County, {pr['state']}
-COORDINATES: {pr['lat']}, {pr['lon']}
-ACREAGE: {pr['acres']}
-OWNER: {pr['owner']}
-ZONING: {pr['zoning']}
-LAND USE: {pr['land_use']}
-
-----------------------------------------------------------------
-OVERALL SITE SCORE: {pr['score']} / 100
-RECOMMENDED PROJECT TYPE: {pr['project_type']}
-PERMITTING RISK: {pr['permit_risk']}
-REVENUE POTENTIAL: {pr['revenue_potential']}
-----------------------------------------------------------------
-
-SCORE BREAKDOWN:
-{breakdown_lines}
-
-----------------------------------------------------------------
-ENVIRONMENTAL ANALYSIS
-----------------------------------------------------------------
-  Wetland Coverage:        {pr['wetland_pct']}%
-  Wetland Type:            {pr['wetland_type']}
-  Flood Zone:              {pr['flood_zone']}
-  Flood Coverage:          {pr['flood_coverage']}%
-
-----------------------------------------------------------------
-SOIL ANALYSIS
-----------------------------------------------------------------
-  Soil Score:              {pr['soil_score']}/100
-  Drainage Class:          {pr['drainage']}
-  Hydric Soil:             {'Yes' if pr['hydric'] else 'No'}
-  Erosion Factor:          {pr['erosion_factor']}
-  Pile Suitability:        {pr['pile_suitability']}
-  Depth to Bedrock:        {pr['bedrock_depth']} ft
-
-----------------------------------------------------------------
-TRANSMISSION & GRID ACCESS
-----------------------------------------------------------------
-  Nearest Trans. Line:     {pr['trans_dist']} miles
-  Line Voltage:            {pr['voltage']}
-  Nearest Substation:      {pr['sub_dist']} miles
-  Interconnection:         {pr['interconnection']}
-
-----------------------------------------------------------------
-HUB / NODE PRICING
-----------------------------------------------------------------
-  Trading Hub:             {pr['hub']}
-  Hub LMP:                 ${pr['hub_lmp']}/MWh
-  Pricing Node:            {pr['node']}
-  Node LMP:                ${pr['node_lmp']}/MWh
-  Basis Difference:        ${pr['basis']}/MWh
-  Congestion Risk:         {pr['congestion']}
-
-----------------------------------------------------------------
-CONGESTION ANALYTICS
-----------------------------------------------------------------
-  Congestion Frequency:    {pr['cong_freq']}%
-  Curtailment Risk:        {pr['curtail_risk']}
-  Revenue Risk:            {pr['rev_risk']}
-
-----------------------------------------------------------------
-COMMUNITY SENTIMENT
-----------------------------------------------------------------
-  Sentiment Score:         {sent_prefix}{pr['sentiment']:.2f}
-  Opposition Risk:         {pr['opp_risk']}
-  Key Issues:
-{issue_lines}
-
-----------------------------------------------------------------
-LAND ECONOMICS
-----------------------------------------------------------------
-  Land Cost (per acre):    ${pr['land_cost_acre']:,}
-  Total Land Cost Est.:    ${pr['land_cost_acre'] * pr['acres']:,}
-
-================================================================
-  Report generated by SiteIQ Renewable Energy Siting Platform
-================================================================
-"""
-        st.text_area("Report Preview", report_text, height=500)
-
-        rc1, rc2, rc3 = st.columns(3)
-        with rc1:
-            safe_name = pr["name"].replace(" ", "_")
-            st.download_button(
-                "Download Report (.txt)", report_text,
-                file_name=f"SiteIQ_Report_{safe_name}.txt",
-                mime="text/plain",
-            )
-        with rc2:
-            csv_data = df.to_csv(index=False)
-            st.download_button(
-                "Download All Sites (.csv)", csv_data,
-                file_name="SiteIQ_All_Parcels.csv", mime="text/csv",
-            )
-        with rc3:
-            geojson = {
-                "type": "FeatureCollection",
-                "features": [
-                    {
-                        "type": "Feature",
-                        "geometry": {
-                            "type": "Point",
-                            "coordinates": [float(r["lon"]), float(r["lat"])],
-                        },
-                        "properties": {
-                            k: (v if not isinstance(v, (np.integer, np.floating)) else int(v) if isinstance(v, np.integer) else float(v))
-                            for k, v in r.items()
-                            if k not in ["lat", "lon", "issues"]
-                        },
-                    }
-                    for _, r in df.iterrows()
-                ],
-            }
-            st.download_button(
-                "Download GeoJSON", json.dumps(geojson, indent=2),
-                file_name="SiteIQ_Parcels.geojson", mime="application/json",
-            )
+        # Also offer CSV + GeoJSON
+        st.divider()
+        st.markdown("### Additional Exports")
+        ec1, ec2 = st.columns(2)
+        with ec1:
+            csv_rows = []
+            for s2 in sites:
+                row = {"name": s2["name"], "state": s2["state"], "county": s2["county"], "acres": s2["total_acres"], "score": scores[s2["id"]], "species_concern": s2["species_concerns"], "permits": s2["permits_needed"], "sentiment": s2["community_sentiment"], "trans_dist_mi": s2["nearest_trans_dist_mi"], "solar_mw": s2["solar_max_capacity_mw"], "wetland_acres": s2["federal_wetland_acres"]}
+                csv_rows.append(row)
+            st.download_button("Download All Sites CSV", pd.DataFrame(csv_rows).to_csv(index=False), file_name="SiteIQ_Sites.csv", mime="text/csv")
+        with ec2:
+            geojson = {"type": "FeatureCollection", "features": [{"type": "Feature", "geometry": {"type": "Point", "coordinates": [s2["lon"], s2["lat"]]}, "properties": {"name": s2["name"], "score": scores[s2["id"]], "acres": s2["total_acres"], "species": s2["species_concerns"]}} for s2 in sites]}
+            st.download_button("Download GeoJSON", json.dumps(geojson, indent=2), file_name="SiteIQ_Sites.geojson", mime="application/json")
 
 
 if __name__ == "__main__":
