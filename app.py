@@ -52,25 +52,23 @@ def reverse_geocode(lat, lon):
         return "Unknown", "Unknown", ""
 
 # ════════════════════════════════════════════════════════════════
-# DATA GENERATION ENGINE — builds realistic data from lat/lon
+# DATA GENERATION ENGINE
 # ════════════════════════════════════════════════════════════════
 def estimate_solar_irradiance(lat):
-    """Higher in south, lower in north. Range ~140-260 W/m2 for CONUS."""
     return int(np.clip(280 - (lat - 25) * 3.2, 140, 270))
 
 def estimate_wind_speed(lat, lon):
-    """Great Plains corridor higher, coasts moderate, SE lower."""
     base = 5.0
-    if -104 < lon < -95 and 30 < lat < 48: base = 8.5  # Great Plains
-    elif -100 < lon < -90 and 35 < lat < 45: base = 7.0  # Midwest
-    elif lon > -80: base = 5.5  # East coast
-    elif lon < -115: base = 6.0  # West
+    if -104 < lon < -95 and 30 < lat < 48: base = 8.5
+    elif -100 < lon < -90 and 35 < lat < 45: base = 7.0
+    elif lon > -80: base = 5.5
+    elif lon < -115: base = 6.0
     return round(base + np.random.uniform(-0.8, 0.8), 1)
 
 def estimate_precip(lat, lon):
-    if lon < -110: return round(np.random.uniform(8, 18), 1)  # arid west
-    if lon < -95: return round(np.random.uniform(18, 35), 1)  # plains
-    return round(np.random.uniform(30, 55), 1)  # east
+    if lon < -110: return round(np.random.uniform(8, 18), 1)
+    if lon < -95: return round(np.random.uniform(18, 35), 1)
+    return round(np.random.uniform(30, 55), 1)
 
 def estimate_elevation(lat, lon):
     if lon < -110: return int(np.random.uniform(3000, 7000))
@@ -88,7 +86,6 @@ def get_wholesale_market(lat, lon):
     return "MISO"
 
 def generate_soil_data(lat, lon):
-    """Generate realistic soil types based on rough US region."""
     np.random.seed(int(abs(lat * 100 + lon * 100)) % 100000)
     soil_templates = {
         "arid": [
@@ -138,7 +135,6 @@ def generate_species(lat, lon):
     return found
 
 def generate_site_data(lat, lon, acres, county, state):
-    """Master function: build full analysis for any lat/lon."""
     np.random.seed(int(abs(lat * 1000 + lon * 1000)) % 99999)
     irr = estimate_solar_irradiance(lat)
     wind = estimate_wind_speed(lat, lon)
@@ -218,8 +214,7 @@ def generate_site_data(lat, lon, acres, county, state):
     return {
         "lat": lat, "lon": lon, "county": county, "state": state,
         "total_acres": acres, "buildable_acres": round(acres - wetland_acres - acres * 0.02, 0),
-        "land_value_per_acre": land_val,
-        "total_land_value": land_val * int(acres),
+        "land_value_per_acre": land_val, "total_land_value": land_val * int(acres),
         "value_index": value_index, "risk_index": risk_index,
         "solar_irradiance_wm2": irr, "direct_irradiance_wm2": irr - int(np.random.uniform(15, 30)),
         "corrected_irradiance_wm2": irr,
@@ -236,8 +231,7 @@ def generate_site_data(lat, lon, acres, county, state):
         "wind_lease_per_acre": wind_lease, "wind_turbines_possible": wind_turbines,
         "wind_max_capacity_mw": wind_mw, "wind_max_annual_mwh": wind_mwh,
         "nearest_trans_dist_mi": trans_dist, "nearest_trans_capacity_mw": trans_cap,
-        "nearest_sub_dist_mi": sub_dist,
-        "wholesale_market": market,
+        "nearest_sub_dist_mi": sub_dist, "wholesale_market": market,
         "federal_wetland_acres": wetland_acres,
         "flood_risk_score": flood_score, "flood_zone": flood_zone,
         "species_list": species, "species_concerns": species_level,
@@ -247,7 +241,6 @@ def generate_site_data(lat, lon, acres, county, state):
         "trans_owner": "Regional Utility",
         "sub_name": f"{county[:10]} Sub",
     }
-
 
 # ════════════════════════════════════════════════════════════════
 # PDF
@@ -340,7 +333,18 @@ def idx_chart(data, title, cs):
 def main():
     with st.sidebar:
         st.markdown("## ⚡ SiteIQ")
-        st.caption("Select any land in the US to analyze")
+        st.caption("Renewable Energy Site Screening & Fatal Flaw Analysis")
+
+        # ── Back-link to ERCOT BESS Dashboard ──────────────────
+        st.markdown(
+            '<a href="https://ercot-bess-dashboard-nhh9eztsqeuqxxuz97kacu.streamlit.app/" target="_blank">'
+            '<button style="width:100%;padding:8px;margin-top:6px;background:#0f172a;color:#5de0a5;'
+            'border:1px solid #1e3a2a;border-radius:8px;cursor:pointer;font-size:13px;">'
+            '⚡ Open ERCOT BESS Dashboard</button></a>',
+            unsafe_allow_html=True
+        )
+        # ───────────────────────────────────────────────────────
+
         st.divider()
         st.markdown("### 1. Find Your Site")
         search_q = st.text_input("Search address or place", placeholder="e.g. Runnels County, TX")
@@ -363,7 +367,7 @@ def main():
         if tw != 100: st.warning(f"Total: {tw}% (need 100%)")
         else: st.success("Weights: 100%")
 
-    # ── State: selected location ──
+    # ── State ──
     if "sel_lat" not in st.session_state: st.session_state.sel_lat = None
     if "sel_lon" not in st.session_state: st.session_state.sel_lon = None
     if "site_data" not in st.session_state: st.session_state.site_data = None
@@ -396,11 +400,10 @@ def main():
         folium.Marker([st.session_state.sel_lat, st.session_state.sel_lon],
                       icon=folium.Icon(color="purple",icon="bolt",prefix="fa"),
                       tooltip="Selected Site").add_to(m)
-        # Draw approximate parcel boundary
-        d = (acres ** 0.5) * 0.00135  # rough conversion acres -> degrees
+        d_box = (acres ** 0.5) * 0.00135
         folium.Rectangle(
-            bounds=[[st.session_state.sel_lat - d/2, st.session_state.sel_lon - d/2],
-                    [st.session_state.sel_lat + d/2, st.session_state.sel_lon + d/2]],
+            bounds=[[st.session_state.sel_lat - d_box/2, st.session_state.sel_lon - d_box/2],
+                    [st.session_state.sel_lat + d_box/2, st.session_state.sel_lon + d_box/2]],
             color="#6366f1", weight=2, fill=True, fill_color="#6366f1", fill_opacity=0.15,
             tooltip=f"~{acres} acres AOI",
         ).add_to(m)
@@ -408,22 +411,19 @@ def main():
 
     map_out = st_folium(m, width=None, height=500, returned_objects=["last_clicked"])
 
-    # Handle map click
     if map_out and map_out.get("last_clicked"):
         clat = map_out["last_clicked"]["lat"]
         clng = map_out["last_clicked"]["lng"]
-        if 24 < clat < 50 and -130 < clng < -65:  # within CONUS
+        if 24 < clat < 50 and -130 < clng < -65:
             st.session_state.sel_lat = clat
             st.session_state.sel_lon = clng
             st.session_state.site_data = None
             st.rerun()
 
-    # ── If no site selected yet ──
     if not st.session_state.sel_lat:
         st.info("Click on the map or search an address in the sidebar to begin analysis.")
         return
 
-    # ── Generate / retrieve data ──
     lat = st.session_state.sel_lat
     lon = st.session_state.sel_lon
     county, state, display_name = reverse_geocode(lat, lon)
@@ -434,7 +434,6 @@ def main():
     d = st.session_state.site_data
     score, bd = compute_score(d, w)
 
-    # ── Location Header ──
     color = "#22c55e" if score >= 75 else "#f59e0b" if score >= 50 else "#ef4444"
     st.markdown(f"""<div style='display:flex;align-items:center;gap:24px;margin:16px 0'>
         <div style='font-size:3.5rem;font-weight:900;color:{color}'>{score}</div>
@@ -442,14 +441,12 @@ def main():
         <div style='color:#94a3b8'>{lat:.4f}, {lon:.4f} | {acres:,} acres | {d['buildable_acres']:,.0f} buildable | {d['wholesale_market']} Market</div></div>
     </div>""", unsafe_allow_html=True)
 
-    # ── Tabs ──
     tab_summary, tab_env, tab_infra, tab_market, tab_export = st.tabs([
         "Summary", "Environmental", "Infrastructure", "Market", "Export",
     ])
 
     # ━━━ SUMMARY ━━━
     with tab_summary:
-        # Concerns
         c1,c2,c3 = st.columns(3)
         with c1:
             cls = {"High":"concern-high","Moderate":"concern-mod","Low":"concern-low"}.get(d["species_concerns"],"concern-low")
@@ -461,7 +458,6 @@ def main():
             pcls = "concern-high" if d["permits_needed"]>10 else "concern-mod" if d["permits_needed"]>5 else "concern-low"
             st.markdown(f"<div class='{pcls}'><b>Permits</b><br>{d['permits_needed']} total<br>{d['federal_permits']} Fed / {d['state_permits']} State</div>",unsafe_allow_html=True)
 
-        # KPIs
         st.markdown("### Key Metrics")
         m1,m2,m3,m4,m5,m6 = st.columns(6)
         with m1: st.metric("Solar",f"{d['solar_max_capacity_mw']} MW")
@@ -471,13 +467,11 @@ def main():
         with m5: st.metric("Trans. Dist",f"{d['nearest_trans_dist_mi']} mi")
         with m6: st.metric("Land Value",f"${d['land_value_per_acre']:,}/ac")
 
-        # Value + Risk Indexes
         st.markdown("### Value & Risk Indexes")
         vi_c, ri_c = st.columns(2)
         with vi_c: st.plotly_chart(idx_chart(d["value_index"],"Value Index",["#ef4444","#f59e0b","#22c55e"]),use_container_width=True)
         with ri_c: st.plotly_chart(idx_chart(d["risk_index"],"Risk Index",["#22c55e","#f59e0b","#ef4444"]),use_container_width=True)
 
-        # Score radar
         st.markdown("### Score Breakdown")
         cats = list(bd.keys()); vals = list(bd.values())
         fig_r = go.Figure(go.Scatterpolar(r=vals+[vals[0]],theta=cats+[cats[0]],fill="toself",fillcolor="rgba(99,102,241,0.2)",line=dict(color="#6366f1",width=2)))
